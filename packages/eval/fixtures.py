@@ -29,6 +29,7 @@ class Fixture(BaseModel):
     turns: list[FixtureTurn]
     expect_final_state: FinalState = "CALM"
     expect_alert_before_t: float | None = None
+    expect_call_level_signals: list[str] = []
 
 
 def load_fixture(fixture_id: str) -> Fixture:

@@ -26,5 +26,6 @@
      "expect_signals": []}
   ],
   "expect_final_state": "CALM",
-  "expect_alert_before_t": null
+  "expect_alert_before_t": null,
+  "expect_call_level_signals": ["NO_ACTION_ASKED"]
 }
