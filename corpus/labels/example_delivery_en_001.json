@@ -1,0 +1,12 @@
+{
+  "id": "example_delivery_en_001",
+  "file": "fixtures/audio/hello_16k.wav",
+  "language": "en",
+  "label": "legit",
+  "scam_family": "delivery",
+  "transfer_line_t": null,
+  "turns": [
+    {"t_start": 0.0, "t_end": 4.0, "role": "CALLER", "signals": []},
+    {"t_start": 4.5, "t_end": 9.5, "role": "CALLEE", "signals": []}
+  ]
+}

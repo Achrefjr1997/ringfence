@@ -1,0 +1,81 @@
+"""Release gate (T-5.4, production §11.5).
+
+    python -m packages.eval.gate --baseline reports/baseline.json --candidate reports/latest.json
+
+Exit non-zero on regression:
+
+    recall_new              >= recall_base - 0.5pp
+    fpr_new                 <= min(fpr_base, 0.5%)
+    per_language_recall_new >= per_language_recall_base - 2pp   # every language
+    per_language_fpr_new    <= 0.7%                             # every language
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Any
+
+from packages.eval.metrics import compute_metrics
+
+_RECALL_DROP = 0.005  # 0.5 pp
+_FPR_CEILING = 0.005  # 0.5 %
+_LANG_RECALL_DROP = 0.02  # 2 pp
+_LANG_FPR_CEILING = 0.007  # 0.7 %
+
+
+def check_gate(baseline: dict[str, Any], candidate: dict[str, Any]) -> list[str]:
+    """Return a list of gate failures; empty means the candidate ships."""
+    fails: list[str] = []
+    ba, ca = baseline["aggregate"], candidate["aggregate"]
+
+    b_recall, c_recall = ba["call_recall"], ca["call_recall"]
+    if b_recall is not None and c_recall is not None and c_recall < b_recall - _RECALL_DROP:
+        fails.append(f"recall {c_recall:.4f} < baseline {b_recall:.4f} - {_RECALL_DROP} (0.5pp)")
+
+    b_fpr, c_fpr = ba["fpr_intervene"], ca["fpr_intervene"]
+    if c_fpr is not None:
+        ceiling = min(b_fpr, _FPR_CEILING) if b_fpr is not None else _FPR_CEILING
+        if c_fpr > ceiling:
+            fails.append(f"FPR {c_fpr:.4f} > min(baseline, 0.5%) = {ceiling:.4f}")
+
+    for lang, cl in candidate["per_language"].items():
+        bl = baseline["per_language"].get(lang)
+        if (
+            bl is not None
+            and bl["call_recall"] is not None
+            and cl["call_recall"] is not None
+            and cl["call_recall"] < bl["call_recall"] - _LANG_RECALL_DROP
+        ):
+            fails.append(
+                f"{lang}: recall {cl['call_recall']:.4f} < baseline "
+                f"{bl['call_recall']:.4f} - {_LANG_RECALL_DROP} (2pp)"
+            )
+        if cl["fpr_intervene"] is not None and cl["fpr_intervene"] > _LANG_FPR_CEILING:
+            fails.append(f"{lang}: FPR {cl['fpr_intervene']:.4f} > {_LANG_FPR_CEILING} (0.7%)")
+
+    return fails
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="python -m packages.eval.gate")
+    ap.add_argument("--baseline", type=Path, required=True)
+    ap.add_argument("--candidate", type=Path, required=True)
+    args = ap.parse_args(argv)
+
+    baseline = compute_metrics(json.loads(args.baseline.read_text(encoding="utf-8")))
+    candidate = compute_metrics(json.loads(args.candidate.read_text(encoding="utf-8")))
+    fails = check_gate(baseline, candidate)
+
+    if not fails:
+        print("GATE PASS")
+        return 0
+    print("GATE FAIL")
+    for f in fails:
+        print(f"  - {f}")
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,21 @@
+# Tenant scoping (T-6.4). An unknown tenant inherits the `default` profile
+# but keeps its own id (and therefore its own `rf.<id>.*` subject space).
+tenants:
+  default:
+    quota: 100
+    allow_cloud: true
+    consent_required: false
+    languages: [en, fr, ar_tn]
+
+  acme:
+    quota: 25
+    allow_cloud: true
+    consent_required: true
+    languages: [en, fr]
+    guardian_webhook_url: https://acme.example/ringfence/guardian
+
+  aircarrier:            # a no-egress carrier
+    quota: 500
+    allow_cloud: false
+    consent_required: true
+    languages: [ar_tn, fr]
