@@ -40,6 +40,10 @@ class Thresholds(BaseModel):
     intervene: float
     sustain_turns: int = 2
     decay_half_life_s: float = 90.0
+    watch_margin: float = 10.0
+    watch_quiet_s: float = 45.0
+    alert_margin: float = 15.0
+    alert_quiet_s: float = 30.0
 
 
 class SignalSpec(BaseModel):
