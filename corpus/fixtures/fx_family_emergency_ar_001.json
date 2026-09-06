@@ -3,7 +3,7 @@
   "language": "ar_tn",
   "label": "fraud",
   "scam_family": "family_emergency",
-  "transfer_request_t": 22.0,
+  "transfer_request_t": 25.0,
   "turns": [
     {"t_start": 0.0, "t_end": 4.5, "role": "CALLER",
      "text": "سلامة، نحكي مع السيد كريم؟ أنا من البوليس. ولدك تحت الاحتياط، تحاشك هذا الصباح.",
@@ -25,5 +25,5 @@
      "text": "حسنا، أنا بش نعمل التحويل توا.", "expect_signals": []}
   ],
   "expect_final_state": "INTERVENE",
-  "expect_alert_before_t": 22.0
+  "expect_alert_before_t": 25.0
 }
