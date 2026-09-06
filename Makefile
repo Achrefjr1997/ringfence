@@ -4,7 +4,7 @@ install:    ; pip install -e ".[dev]"
 test:       ; pytest -q
 inv:        ; pytest -q -m invariant
 lint:       ; ruff check . && ruff format --check . && go vet ./cmd/... ./pkg/...
-typecheck:  ; mypy packages apps
+typecheck:  ; mypy packages
 check:      ; $(MAKE) lint && $(MAKE) typecheck && $(MAKE) test
 eval:       ; python -m packages.eval.run --all --report reports/latest.json
 run:        ; uvicorn apps.gateway.main:app --reload --port 8000

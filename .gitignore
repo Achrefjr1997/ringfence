@@ -6,5 +6,6 @@ reports/
 corpus/audio/
 .coverage
 *.egg-info/
+bin/
 cmd/gateway/bin/
 cmd/normalizer/bin/
