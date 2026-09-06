@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RingFence — console</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --calm: #3a7; --watch: #b93; --alert: #d73; --intervene: #d33;
+      }
+      body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 1.25rem; max-width: 52rem; }
+      h1 { font-size: 1.05rem; margin: 0 0 .9rem; }
+      .row { display: flex; gap: .5rem; align-items: center; margin-bottom: .9rem; flex-wrap: wrap; }
+      input { padding: .38rem .5rem; font: inherit; }
+      button { padding: .38rem .85rem; font: inherit; cursor: pointer; }
+      .status { font-variant: small-caps; opacity: .8; }
+
+      .grid { display: grid; grid-template-columns: 84px 1fr; gap: 1rem; align-items: stretch; }
+      /* pressure gauge */
+      .gauge-wrap { display: flex; flex-direction: column; align-items: center; gap: .4rem; }
+      .gauge { position: relative; width: 46px; flex: 1; min-height: 220px; background: #8882; border-radius: 6px; overflow: hidden; }
+      .gauge > span { position: absolute; bottom: 0; left: 0; right: 0; height: 0; background: var(--calm); transition: height .2s ease, background .2s; }
+      .gauge > span[data-state="WATCH"] { background: var(--watch); }
+      .gauge > span[data-state="ALERT"] { background: var(--alert); }
+      .gauge > span[data-state="INTERVENE"] { background: var(--intervene); }
+      .glabel { font: 600 12px ui-monospace, monospace; }
+      .glabel[data-state="INTERVENE"] { color: var(--intervene); }
+      .glabel[data-state="ALERT"] { color: var(--alert); }
+
+      /* transcript */
+      .panel { border: 1px solid #8883; border-radius: 6px; }
+      #transcript { height: 230px; overflow: auto; padding: .5rem .6rem; font-family: ui-monospace, monospace; font-size: .82rem; }
+      .turn { padding: .2rem 0; border-bottom: 1px solid #8881; }
+      .turn .role { display: inline-block; width: 62px; opacity: .6; font-size: .7rem; }
+      .turn-CALLER .txt { color: #c62; }
+      .turn-CALLEE .txt { color: #38a; }
+      .turn-UNKNOWN .txt { opacity: .65; }
+      .chip { display: inline-block; margin-left: .35rem; padding: 0 .35rem; border-radius: 3px; background: #d7333322; color: var(--alert); font-size: .68rem; }
+
+      /* timeline */
+      #timeline { margin-top: 1rem; }
+      .tl { width: 100%; height: auto; }
+      .tl .axis { stroke: #8886; stroke-width: 1; }
+      .tl .tick { fill: #8889; font-size: 9px; text-anchor: middle; }
+      .tl .sig { stroke: var(--alert); stroke-width: 1.5; opacity: .55; }
+      .tl .siglab { fill: var(--alert); font-size: 8px; }
+      .tl .tr { stroke-width: 2; }
+      .tl .tr-WATCH { stroke: var(--watch); } .tl .tr-ALERT { stroke: var(--alert); }
+      .tl .tr-INTERVENE { stroke: var(--intervene); }
+      .tl .trlab { font: 700 9px ui-monospace, monospace; text-anchor: middle; }
+      .tl .trlab.tr-WATCH { fill: var(--watch); } .tl .trlab.tr-ALERT { fill: var(--alert); }
+      .tl .trlab.tr-INTERVENE { fill: var(--intervene); }
+      #cf { margin-top: .5rem; font-size: .8rem; opacity: .8; font-style: italic; }
+
+      details { margin-top: 1rem; }
+      .hint { font-size: .78rem; opacity: .7; }
+      .meter label { display: block; font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; opacity: .7; }
+      .bar { height: 12px; background: #8883; border-radius: 3px; overflow: hidden; }
+      .bar > span { display: block; height: 100%; width: 0; background: #3a7; transition: width .05s linear; }
+    </style>
+  </head>
+  <body>
+    <h1>RingFence — live console</h1>
+
+    <div class="row">
+      <input id="sid" placeholder="session id" size="24" />
+      <button id="watch">Watch</button>
+      <button id="capture">Start capture</button>
+      <button id="stop" disabled>Stop</button>
+      <span class="status" id="status">idle</span>
+    </div>
+
+    <div class="grid">
+      <div class="gauge-wrap">
+        <div class="gauge"><span id="gfill"></span></div>
+        <div class="glabel" id="glabel">0 · CALM</div>
+      </div>
+      <div>
+        <div class="panel" id="transcript"></div>
+        <div id="timeline"></div>
+        <div id="cf"></div>
+      </div>
+    </div>
+
+    <details>
+      <summary>speakerphone capture — mic level (the three getUserMedia flags are off)</summary>
+      <p class="hint">
+        Put a real call on speaker. When the other person talks, the lower bar must move —
+        if it stays flat, browser echo cancellation is on and deleting the far-end voice.
+      </p>
+      <div class="meter"><label>full-band (near voice)</label><div class="bar"><span id="mwide"></span></div></div>
+      <div class="meter"><label>≤ 3.4 kHz (far / phone voice)</label><div class="bar"><span id="mtele"></span></div></div>
+    </details>
+
+    <script type="module">
+      import { mountConsole } from "/app.js";
+      import { startCapture, stopCapture } from "/capture.js";
+
+      const $ = (id) => document.getElementById(id);
+      $("sid").value = "web-" + Math.random().toString(36).slice(2, 9);
+
+      const els = {
+        gauge: $("gfill"), gaugeLabel: $("glabel"),
+        transcript: $("transcript"), timeline: $("timeline"),
+        cf: $("cf"), status: $("status"),
+      };
+      let detach = null;
+      const setBar = (el, rms) => {
+        const db = 20 * Math.log10(Math.max(rms, 1e-6));
+        el.style.width = Math.max(0, Math.min(100, ((db + 60) / 60) * 100)) + "%";
+      };
+
+      $("watch").onclick = () => {
+        detach && detach();
+        detach = mountConsole($("sid").value, els);
+        $("stop").disabled = false;
+      };
+
+      $("capture").onclick = async () => {
+        $("capture").disabled = true;
+        try {
+          await startCapture($("sid").value, {
+            onStatus: (s) => ($("status").textContent = s),
+            onLevel: ({ wide, tele }) => { setBar($("mwide"), wide); setBar($("mtele"), tele); },
+          });
+          detach && detach();
+          detach = mountConsole($("sid").value, els);
+          $("stop").disabled = false;
+        } catch (e) {
+          $("status").textContent = "error: " + e.message;
+          $("capture").disabled = false;
+        }
+      };
+
+      $("stop").onclick = () => {
+        stopCapture();
+        detach && detach();
+        $("status").textContent = "stopped";
+        $("capture").disabled = false;
+        $("stop").disabled = true;
+      };
+    </script>
+  </body>
+</html>

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RingFence — case</title>
+    <style>
+      :root { color-scheme: light dark; --alert: #d73; --intervene: #d33; --watch: #b93; }
+      body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 1.25rem; max-width: 56rem; }
+      h1 { font-size: 1.05rem; margin: 0 0 .3rem; }
+      h2 { font-size: .82rem; text-transform: uppercase; letter-spacing: .07em; opacity: .65; margin: 1.4rem 0 .5rem; }
+      .head { font-family: ui-monospace, monospace; opacity: .8; font-size: .85rem; }
+      .st-INTERVENE { color: var(--intervene); font-weight: 600; }
+      .st-ALERT { color: var(--alert); } .st-WATCH { color: var(--watch); }
+      table { border-collapse: collapse; width: 100%; font-size: .82rem; }
+      th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid #8882; }
+      th { opacity: .6; font-weight: 600; }
+      td.num { text-align: right; font-variant-numeric: tabular-nums; }
+      .neg { color: #3a7; } .pos { color: var(--alert); }
+      .decision { border: 1px solid #8883; border-radius: 6px; padding: .6rem .8rem; margin-bottom: .7rem; }
+      .decision .when { font-family: ui-monospace, monospace; font-weight: 600; }
+      .cf { font-style: italic; opacity: .8; margin-top: .3rem; font-size: .82rem; }
+      .turn { font-family: ui-monospace, monospace; font-size: .8rem; padding: .15rem 0; }
+      .turn .r { display: inline-block; width: 58px; opacity: .55; font-size: .7rem; }
+      .turn-CALLER .x { color: var(--alert); } .turn-CALLEE .x { color: #38a; }
+      .fb { display: flex; gap: .5rem; align-items: center; margin-top: .4rem; }
+      .fb button { padding: .35rem .9rem; font: inherit; cursor: pointer; }
+      .fb button[aria-pressed="true"] { outline: 2px solid currentColor; }
+      #fbstate { font-size: .82rem; opacity: .8; }
+      .err { color: var(--intervene); }
+    </style>
+  </head>
+  <body>
+    <h1>Case <span id="sid"></span></h1>
+    <div class="head" id="head">loading…</div>
+
+    <h2>Analyst feedback</h2>
+    <div class="fb">
+      <button data-label="fraud">fraud</button>
+      <button data-label="benign">benign</button>
+      <button data-label="unclear">unclear</button>
+      <span id="fbstate"></span>
+    </div>
+
+    <h2>Decision chain</h2>
+    <div id="chain"></div>
+
+    <h2>Transcript</h2>
+    <div id="transcript"></div>
+
+    <script type="module">
+      const sid = new URLSearchParams(location.search).get("session") || "";
+      document.getElementById("sid").textContent = sid;
+      const $ = (id) => document.getElementById(id);
+
+      async function load() {
+        const r = await fetch(`/cases/${encodeURIComponent(sid)}`);
+        if (!r.ok) { $("head").innerHTML = `<span class="err">no such case</span>`; return null; }
+        return r.json();
+      }
+
+      function render(c) {
+        $("head").innerHTML =
+          `opened t=${c.opened_at.toFixed(1)} · peak ` +
+          `<span class="st-${c.peak_state}">${c.peak_state}</span> ${c.peak_score}`;
+        for (const b of document.querySelectorAll(".fb button"))
+          b.setAttribute("aria-pressed", String(b.dataset.label === c.feedback));
+        $("fbstate").textContent = c.feedback ? `recorded: ${c.feedback}` : "not yet reviewed";
+
+        $("chain").innerHTML = c.decisions.map((d) => `
+          <div class="decision">
+            <span class="when">t=${d.t.toFixed(1)}</span>
+            <span class="st-${d.state}">${d.state}</span> — score ${d.score}
+            <table><thead><tr><th>source</th><th>signal</th><th>role</th><th class="num">points</th></tr></thead>
+              <tbody>${d.contributions.map((x) => `
+                <tr><td>${x.source}</td><td>${x.id}</td><td>${x.role ?? ""}</td>
+                    <td class="num ${x.value < 0 ? "neg" : "pos"}">${x.value}</td></tr>`).join("")}
+              </tbody></table>
+            ${d.counterfactual ? `<div class="cf">${d.counterfactual}</div>` : ""}
+          </div>`).join("");
+
+        $("transcript").innerHTML = c.transcript.map((t) => `
+          <div class="turn turn-${t.role}"><span class="r">${t.role}</span><span class="x"></span></div>`
+        ).join("");
+        [...$("transcript").querySelectorAll(".x")].forEach((el, i) => (el.textContent = c.transcript[i].text));
+      }
+
+      for (const b of document.querySelectorAll(".fb button")) {
+        b.onclick = async () => {
+          const r = await fetch(`/cases/${encodeURIComponent(sid)}/feedback`, {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ label: b.dataset.label }),
+          });
+          if (r.ok) render(await r.json());
+          else $("fbstate").innerHTML = `<span class="err">${(await r.json()).error}</span>`;
+        };
+      }
+
+      const c = await load();
+      if (c) render(c);
+    </script>
+  </body>
+</html>
