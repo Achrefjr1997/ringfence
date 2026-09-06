@@ -1,8 +1,33 @@
 import asyncio
 import contextlib
-from typing import Any
+from typing import Any, AsyncGenerator, Protocol, runtime_checkable
 
 from packages.contracts.events import InProcessBus
+
+
+async def test_protocol_typed_consumer_works_with_aclosing() -> None:
+    """T-2.4+ consume EventBus, not InProcessBus.
+
+    The Protocol's subscribe() must expose aclose-able AsyncGenerator,
+    or aclosing() around a Protocol-typed consumer fails mypy exactly
+    where the intended pattern uses it.
+    """
+    from packages.contracts.events import EventBus
+
+    @runtime_checkable
+    class _BusLike(Protocol):
+        async def publish(self, subject: str, payload: dict[str, Any]) -> None: ...
+        def subscribe(self, pattern: str) -> AsyncGenerator[tuple[str, dict[str, Any]], None]: ...
+
+    bus: EventBus = InProcessBus(maxlen=10)
+    await bus.publish("rf.tn.x.1", {"i": 1})
+    got: list[tuple[str, dict[str, Any]]] = []
+    async with contextlib.aclosing(bus.subscribe("rf.tn.*")) as gen:
+        async for item in gen:
+            got.append(item)
+            break
+    assert got == [("rf.tn.x.1", {"i": 1})]
+    assert isinstance(bus, _BusLike)
 
 
 async def test_bus_bounded_drop_oldest_no_subscriber() -> None:

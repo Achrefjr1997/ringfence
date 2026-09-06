@@ -1,12 +1,12 @@
 import asyncio
 import fnmatch
 from collections import deque
-from typing import Any, AsyncGenerator, AsyncIterator, Protocol
+from typing import Any, AsyncGenerator, Protocol
 
 
 class EventBus(Protocol):
     async def publish(self, subject: str, payload: dict[str, Any]) -> None: ...
-    def subscribe(self, pattern: str) -> AsyncIterator[tuple[str, dict[str, Any]]]: ...
+    def subscribe(self, pattern: str) -> AsyncGenerator[tuple[str, dict[str, Any]], None]: ...
 
 
 class InProcessBus(EventBus):
