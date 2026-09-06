@@ -1,0 +1,65 @@
+# Warning templates (T-4.2, production §8.2).
+# Specific and actionable — a generic warning is ignored, and an ignored
+# warning is a failed intervention.  Selection: highest-weight CALLER
+# signal in the last 60 s; DEFAULT otherwise.
+templates:
+  AUTH_CLAIM:
+    en: "Anyone can say they are from your bank. Hang up and call the number on your card yourself."
+    fr: "N'importe qui peut dire qu'il appelle de votre banque. Raccrochez et rappelez le numéro au dos de votre carte."
+    ar_tn: "أي واحد ينجم يقول روحو من البنك. اقطع الخط واتصل بالرقم اللي في البطاقة متاعك."
+  VERIF_INVERT:
+    en: "Stop. Never read a code, PIN, or card number to someone who called you."
+    fr: "Arrêtez. Ne communiquez jamais un code, un code secret ni un numéro de carte à quelqu'un qui vous a appelé."
+    ar_tn: "أوقف. عمرك ما تقرا كود ولا رقم سري ولا رقم بطاقة لواحد هو اللي كلمك."
+  RAIL_UNUSUAL:
+    en: "Stop. A bank will never ask you to buy gift cards or move money to a safe account."
+    fr: "Arrêtez. Une banque ne vous demandera jamais d'acheter des cartes ni de transférer vers un compte securise."
+    ar_tn: "أوقف. البنك عمرو ما يطلب منك تشري كارتات ولا تحوّل فلوس لحساب آخر."
+  REMOTE_ACCESS:
+    en: "Stop. Do not install anything or let anyone connect to your phone or computer."
+    fr: "Arretez. N'installez rien et ne laissez personne se connecter a votre telephone ou ordinateur."
+    ar_tn: "أوقف. ما تنزّل حتى حاجة وما تخلي حد يدخل لتليفونك ولا كمبيوترك."
+  URGENCY:
+    en: "Real institutions give you time. Pressure to act now is a scam sign — hang up and verify."
+    fr: "Les vraies institutions vous laissent le temps. La pression pour agir maintenant est un signe d'arnaque — raccrochez et verifiez."
+    ar_tn: "المؤسسات الحقيقية تخليك وقت. الضغط باش تعمل توا علامة نصب — اقطع الخط وتثبت."
+  SECRECY:
+    en: "Being told to keep a call secret from family or your bank is a scam sign. Talk to someone you trust."
+    fr: "Qu'on vous demande de garder un appel secret vis-a-vis de la famille ou de la banque est un signe d'arnaque. Parlez-en a un proche."
+    ar_tn: "كي يقولولك ما تحكيش على المكالمة لعائلتك ولا لبنكك، هذي علامة نصب. احكي مع واحد تثق فيه."
+  CALLBACK_SUPPRESS:
+    en: "If they tell you not to hang up, hang up. Then call your bank on its official number."
+    fr: "S'ils vous disent de ne pas raccrocher, raccrochez. Puis appelez votre banque sur son numero officiel."
+    ar_tn: "كان يقولولك ما تقطعش الخط، اقطعو. ومن بعد اتصل بالبنك على الرقم الرسمي."
+  EMOTION_LEVER:
+    en: "A claim that a relative is in danger or under arrest is a common scam. Call that person directly first."
+    fr: "Affirmer qu'un proche est en danger ou arrete est une arnaque frequente. Appelez d'abord cette personne directement."
+    ar_tn: "كي يقولولك قريبك في خطر ولا موقّف، هذا نصب معروف. اتصل بيه هو أول حاجة."
+  SCRIPT_RIGIDITY:
+    en: "If the caller will not deviate from a script or answer plain questions, hang up and verify."
+    fr: "Si l'interlocuteur ne s'ecarte pas d'un script et n'accepte pas de questions simples, raccrochez et verifiez."
+    ar_tn: "كان اللي يكلمك ما يخرجش من نص محفوظ وما يجاوبش على أسئلة بسيطة، اقطع الخط وتثبت."
+  ESCALATION:
+    en: "Rising threats and urgency as the call goes on is a pressure tactic. Hang up now."
+    fr: "Des menaces et une urgence qui montent au fil de l'appel sont une tactique de pression. Raccrochez maintenant."
+    ar_tn: "التهديد والاستعجال اللي يزيدو كي تطول المكالمة تكتيك ضغط. اقطع الخط توا."
+  REFUSE_SECRETS:
+    en: "Good — a real bank never asks for your code. Still, end the call and dial your bank yourself to be sure."
+    fr: "Bien — une vraie banque ne demande jamais votre code. Terminez quand meme l'appel et rappelez votre banque vous-meme."
+    ar_tn: "باهي — البنك الحقيقي عمرو ما يطلب الكود. برشا، اقطع المكالمة واتصل بالبنك بروحك باش تتأكد."
+  OFFER_CALLBACK:
+    en: "Take them up on it: hang up and call back the official number on your card."
+    fr: "Acceptez : raccrochez et rappelez le numero officiel au dos de votre carte."
+    ar_tn: "اعمل هكاكا: اقطع الخط واتصل بالرقم الرسمي اللي في البطاقة."
+  NO_ACTION_ASKED:
+    en: "No action was requested, which is a good sign. If anything changes, hang up and verify."
+    fr: "Aucune action n'a ete demandee, bon signe. Si quelque chose change, raccrochez et verifiez."
+    ar_tn: "ما طلبو منك حتى حاجة، وهذي علامة باهية. كان تبدّل شي، اقطع الخط وتثبت."
+  BRANCH_REFERRAL:
+    en: "Going into a branch in person is the safe move. Do not act on this call."
+    fr: "Vous rendre en agence en personne est la solution sure. N'agissez pas sur la base de cet appel."
+    ar_tn: "تمشي للوكالة بروحك هي الحل الآمن. ما تعملش حتى حاجة على أساس هذي المكالمة."
+  DEFAULT:
+    en: "Hang up and call the number on the back of your card yourself before doing anything."
+    fr: "Raccrochez et rappelez le numero au dos de votre carte vous-meme avant de faire quoi que ce soit."
+    ar_tn: "اقطع الخط واتصل بالرقم اللي في ضهر بطاقتك بروحك قبل ما تعمل حتى حاجة."

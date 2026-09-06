@@ -1,0 +1,49 @@
+# Local topology (T-6.2, production §15.1).
+# Same image and the same RF_* configuration surface as production.
+# The MVP gateway runs capture -> ASR -> detection -> action in one process;
+# the split detector/decider/actioner services below are placeholders for
+# the production topology. RF_DRY_RUN=true means the action plane computes
+# warnings but sends nothing (invariant #4).
+services:
+  nats:
+    image: nats:2-alpine
+    command: ["-js"]
+    ports: ["4222:4222"]
+
+  redis:
+    image: valkey/valkey:8-alpine
+    ports: ["6379:6379"]
+
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_PASSWORD: dev
+    ports: ["5432:5432"]
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: dev
+      MINIO_ROOT_PASSWORD: devdevdev
+    ports: ["9000:9000", "9001:9001"]
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: apps/gateway/Dockerfile
+    environment:
+      RF_MODE: local
+      RF_DRY_RUN: "true" # the gateway is also the actioner in the MVP
+      RF_NATS: nats://nats:4222
+      RF_REDIS: redis://redis:6379
+      RF_ASR_PROVIDER: ${RF_ASR_PROVIDER:-null} # null | assemblyai
+      ASSEMBLYAI_API_KEY: ${ASSEMBLYAI_API_KEY:-}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+    ports: ["8000:8000"]
+    depends_on: [nats, redis, postgres]
+
+  # --- production split (not built by the MVP) -------------------------
+  # detector: { build: ./apps/detector, deploy: { replicas: 2 } }
+  # decider:  { build: ./apps/decider }
+  # actioner: { build: ./apps/actioner, environment: { RF_DRY_RUN: "true" } }

@@ -1,0 +1,27 @@
+# Hypothèses zero-shot NLI par signal (français).
+# Le tour de parole est la prémisse ; le signal se déclenche quand la
+# probabilité d'implication maximale dépasse le seuil du pack.
+AUTH_CLAIM:
+  - "L'interlocuteur prétend appeler d'une banque, de la police, des impôts ou d'une grande entreprise."
+  - "L'interlocuteur affirme représenter un service officiel de sécurité ou de lutte contre la fraude."
+URGENCY:
+  - "L'interlocuteur pousse la personne à agir immédiatement ou dans les minutes qui suivent."
+  - "L'interlocuteur menace de bloquer ou de fermer le compte aujourd'hui si la personne n'agit pas tout de suite."
+SECRECY:
+  - "L'interlocuteur demande de ne parler de cet appel à personne, ni à la famille ni au personnel de la banque."
+CALLBACK_SUPPRESS:
+  - "L'interlocuteur demande de rester en ligne et de ne pas raccrocher ni rappeler la banque."
+RAIL_UNUSUAL:
+  - "L'interlocuteur demande de payer par carte cadeau, cryptomonnaie, virement, ou de transférer l'argent vers un nouveau compte sécurisé."
+REMOTE_ACCESS:
+  - "L'interlocuteur demande d'installer une application ou de donner un accès à distance à l'ordinateur ou au téléphone."
+VERIF_INVERT:
+  - "L'interlocuteur demande de lui communiquer un code reçu par SMS, un code secret, un numéro de carte ou un mot de passe."
+EMOTION_LEVER:
+  - "L'interlocuteur affirme qu'un proche est en danger, arrêté ou en situation d'urgence pour effrayer la personne."
+REFUSE_SECRETS:
+  - "L'interlocuteur précise que la banque ne demandera jamais le code secret, le numéro de carte ou le code reçu par SMS."
+OFFER_CALLBACK:
+  - "L'interlocuteur invite la personne à raccrocher et à rappeler le numéro officiel au dos de sa carte."
+BRANCH_REFERRAL:
+  - "L'interlocuteur propose à la personne de se rendre dans une agence bancaire."

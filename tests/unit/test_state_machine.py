@@ -1,5 +1,7 @@
 import re
 
+import pytest
+
 from packages.contracts.risk import Contribution
 from packages.policy.pack import load_pack
 from packages.risk.state import RiskStateMachine
@@ -135,3 +137,35 @@ def test_end_resolves() -> None:
     d = m.end(2.0)
     assert d is not None and d.state == "RESOLVED"
     assert m.end(3.0) is None  # already resolved
+
+
+@pytest.mark.invariant
+def test_combo_critical_requires_alert_state() -> None:
+    """Invariant #7: COMBO_CRITICAL cannot jump to INTERVENE from CALM
+    or WATCH.  The ALERT state gate is the safety floor — once in
+    ALERT, combo alone fires immediately (even at low score); before
+    ALERT, it does nothing special."""
+    m = _machine()
+    combo = [Contribution(source="combo", id="COMBO_CRITICAL", value=35.0)]
+
+    # From CALM with combo: stays CALM
+    assert m.update(20.0, combo, 0.0) is None
+    assert m.state == "CALM"
+
+    # Two turns ≥ watch → WATCH (transition 1)
+    m.update(56.0, [], 1.0)
+    assert m.update(56.0, [], 2.0) is not None
+    assert m.state == "WATCH"  # type: ignore[comparison-overlap]
+
+    # Combo present but in WATCH: no jump to INTERVENE
+    d = m.update(20.0, combo, 3.0)
+    assert d is None  # no transition
+    assert m.state == "WATCH"  # type: ignore[comparison-overlap]
+
+    # Only after reaching ALERT does combo matter
+    m.update(60.0, [], 4.0)  # sustain=1 in WATCH
+    d = m.update(60.0, [], 5.0)  # sustain=2 → ALERT (transition 2)
+    assert d is not None and d.state == "ALERT"
+    # Now combo alone fires INTERVENE even at score 20
+    d = m.update(20.0, combo, 6.0)
+    assert d is not None and d.state == "INTERVENE"  # type: ignore[comparison-overlap]
