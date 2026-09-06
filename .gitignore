@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+reports/
+corpus/audio/
+.coverage
+*.egg-info/
+cmd/gateway/bin/
+cmd/normalizer/bin/
