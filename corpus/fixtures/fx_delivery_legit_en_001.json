@@ -1,0 +1,21 @@
+{
+  "id": "fx_delivery_legit_en_001",
+  "language": "en",
+  "label": "benign",
+  "scam_family": "delivery",
+  "transfer_request_t": null,
+  "turns": [
+    {"t_start": 0.0, "t_end": 3.5, "role": "CALLER",
+     "text": "Good morning, this is DHL. I have a package for you, delivery this afternoon.",
+     "expect_signals": []},
+    {"t_start": 4.0, "t_end": 6.0, "role": "CALLEE",
+     "text": "Oh great, thank you.", "expect_signals": []},
+    {"t_start": 7.0, "t_end": 10.0, "role": "CALLER",
+     "text": "I will be at your address between three and five. No payment is needed on delivery.",
+     "expect_signals": []},
+    {"t_start": 11.0, "t_end": 13.0, "role": "CALLEE",
+     "text": "Perfect, see you then.", "expect_signals": []}
+  ],
+  "expect_final_state": "CALM",
+  "expect_alert_before_t": null
+}

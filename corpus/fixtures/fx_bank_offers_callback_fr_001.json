@@ -1,0 +1,29 @@
+{
+  "id": "fx_bank_offers_callback_fr_001",
+  "language": "fr",
+  "label": "benign",
+  "scam_family": "legit_institutional",
+  "transfer_request_t": null,
+  "turns": [
+    {"t_start": 0.0, "t_end": 3.5, "role": "CALLER",
+     "text": "Bonjour, je vous appelle du service relation client de votre banque au sujet de votre nouvelle carte.",
+     "expect_signals": []},
+    {"t_start": 4.0, "t_end": 6.0, "role": "CALLEE",
+     "text": "Ah, d'accord.", "expect_signals": []},
+    {"t_start": 7.0, "t_end": 11.0, "role": "CALLER",
+     "text": "Pour des raisons de sécurité, je ne vous demanderai jamais votre code confidentiel par téléphone.",
+     "expect_signals": ["REFUSE_SECRETS"]},
+    {"t_start": 12.0, "t_end": 14.0, "role": "CALLEE",
+     "text": "C'est bon à savoir.", "expect_signals": []},
+    {"t_start": 15.0, "t_end": 19.0, "role": "CALLER",
+     "text": "Si vous voulez, raccrochez et appelez-nous au numéro au dos de votre carte pour activer la carte.",
+     "expect_signals": ["OFFER_CALLBACK"]},
+    {"t_start": 20.0, "t_end": 23.0, "role": "CALLER",
+     "text": "Vous pouvez aussi passer directement en agence, nos conseillers vous aideront sur place.",
+     "expect_signals": ["BRANCH_REFERRAL"]},
+    {"t_start": 24.0, "t_end": 26.0, "role": "CALLEE",
+     "text": "Merci, je passerai en agence.", "expect_signals": []}
+  ],
+  "expect_final_state": "CALM",
+  "expect_alert_before_t": null
+}

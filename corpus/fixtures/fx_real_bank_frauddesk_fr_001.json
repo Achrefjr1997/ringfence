@@ -1,0 +1,30 @@
+{
+  "id": "fx_real_bank_frauddesk_fr_001",
+  "language": "fr",
+  "label": "benign",
+  "scam_family": "legit_institutional",
+  "transfer_request_t": null,
+  "turns": [
+    {"t_start": 0.0, "t_end": 4.5, "role": "CALLER",
+     "text": "Bonjour, ici le service sécurité de la Banque de Tunisie. Nous avons détecté une transaction inhabituelle ce matin, un paiement de 850 dinars à l'étranger.",
+     "expect_signals": ["AUTH_CLAIM"]},
+    {"t_start": 5.0, "t_end": 7.0, "role": "CALLEE",
+     "text": "Ah bon, je n'ai rien acheté à l'étranger.", "expect_signals": []},
+    {"t_start": 8.0, "t_end": 12.0, "role": "CALLER",
+     "text": "C'est bien ce qu'on pensait, on a bloqué la transaction par précaution. Il faut qu'on confirme rapidement.",
+     "expect_signals": ["URGENCY"]},
+    {"t_start": 13.0, "t_end": 16.0, "role": "CALLEE",
+     "text": "D'accord, qu'est-ce qu'il faut faire ?", "expect_signals": []},
+    {"t_start": 17.0, "t_end": 22.0, "role": "CALLER",
+     "text": "Je ne vais surtout pas vous demander votre numéro de carte ni le code reçu par SMS — on n'en a pas besoin.",
+     "expect_signals": ["REFUSE_SECRETS"]},
+    {"t_start": 23.0, "t_end": 28.0, "role": "CALLER",
+     "text": "Si vous préférez, raccrochez et rappelez le numéro au dos de votre carte, on vous confirmera la même chose.",
+     "expect_signals": ["OFFER_CALLBACK"]},
+    {"t_start": 29.0, "t_end": 34.0, "role": "CALLER",
+     "text": "La carte reste bloquée jusqu'à demain, une nouvelle vous sera envoyée par courrier.",
+     "expect_signals": ["NO_ACTION_ASKED"]}
+  ],
+  "expect_final_state": "CALM",
+  "expect_alert_before_t": null
+}

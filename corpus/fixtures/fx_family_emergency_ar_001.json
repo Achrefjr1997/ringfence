@@ -1,0 +1,29 @@
+{
+  "id": "fx_family_emergency_ar_001",
+  "language": "ar_tn",
+  "label": "fraud",
+  "scam_family": "family_emergency",
+  "transfer_request_t": 22.0,
+  "turns": [
+    {"t_start": 0.0, "t_end": 4.5, "role": "CALLER",
+     "text": "سلامة، نحكي مع السيد كريم؟ أنا من البوليس. ولدك تحت الاحتياط، تحاشك هذا الصباح.",
+     "expect_signals": ["EMOTION_LEVER"]},
+    {"t_start": 5.0, "t_end": 6.5, "role": "CALLEE",
+     "text": "علاش؟ شنو صار لولدي؟", "expect_signals": []},
+    {"t_start": 7.0, "t_end": 12.0, "role": "CALLER",
+     "text": "كان في مشاجرة وضرّب ولد آخر. إذا ما خلصتش الغرامة اليوم يكون مسجون.",
+     "expect_signals": ["URGENCY", "EMOTION_LEVER"]},
+    {"t_start": 13.0, "t_end": 15.0, "role": "CALLEE",
+     "text": "يا خويا، شنيّة نعمل؟ أنا عندي فلوس في البطاقة.", "expect_signals": []},
+    {"t_start": 16.0, "t_end": 22.0, "role": "CALLER",
+     "text": "تحويل فوري: د17 ولا فلوسي، راهي موجودين. ما تقولش لأي حد، المسألة سرّية.",
+     "expect_signals": ["RAIL_UNUSUAL", "SECRECY"]},
+    {"t_start": 23.0, "t_end": 25.0, "role": "CALLER",
+     "text": "الغرمة 1500 دينار، لازم تتحول قبل المساء.",
+     "expect_signals": ["URGENCY"]},
+    {"t_start": 26.0, "t_end": 28.0, "role": "CALLEE",
+     "text": "حسنا، أنا بش نعمل التحويل توا.", "expect_signals": []}
+  ],
+  "expect_final_state": "INTERVENE",
+  "expect_alert_before_t": 22.0
+}

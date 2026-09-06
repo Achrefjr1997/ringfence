@@ -1,0 +1,22 @@
+{
+  "id": "fx_callee_repeats_terms_en_001",
+  "language": "en",
+  "label": "benign",
+  "scam_family": "callee_repeats",
+  "transfer_request_t": null,
+  "turns": [
+    {"t_start": 0.0, "t_end": 3.5, "role": "CALLER",
+     "text": "So what happened with that call you got yesterday?",
+     "expect_signals": []},
+    {"t_start": 4.0, "t_end": 10.0, "role": "CALLEE",
+     "text": "He said he was from the bank. He asked me to read my gift card number, so I read it: 4916 3424 8716 5012. Then he asked for the security code and I gave him 482915.",
+     "expect_signals": []},
+    {"t_start": 11.0, "t_end": 13.0, "role": "CALLER",
+     "text": "And then what did he say?", "expect_signals": []},
+    {"t_start": 14.0, "t_end": 18.0, "role": "CALLEE",
+     "text": "He told me to buy more gift cards to fix the problem. I almost did.",
+     "expect_signals": []}
+  ],
+  "expect_final_state": "CALM",
+  "expect_alert_before_t": null
+}

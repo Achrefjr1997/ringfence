@@ -44,6 +44,8 @@ apps/console/         static dashboard
 - **Test-first.** Write the failing test, show it fail, then implement.
 - **No new dependencies** without asking. The allowed list is in
   `pyproject.toml` and it is closed.
+- **Any consumer of `EventBus.subscribe()` that may stop iterating early
+  (disconnect, session end, `break`) MUST wrap it in `contextlib.aclosing()`.**
 - **One task, one commit.** Never squash — commit history is graded.
 - **Type hints everywhere.** `make typecheck` must pass.
 - **If the spec is ambiguous, stop and ask.** Do not guess and do not invent
