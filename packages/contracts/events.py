@@ -1,7 +1,7 @@
 import asyncio
 import fnmatch
 from collections import deque
-from typing import Any, AsyncIterator, Protocol
+from typing import Any, AsyncGenerator, AsyncIterator, Protocol
 
 
 class EventBus(Protocol):
@@ -32,7 +32,7 @@ class InProcessBus(EventBus):
             self._next_seq += 1
             self._new.notify_all()
 
-    async def subscribe(self, pattern: str) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+    async def subscribe(self, pattern: str) -> AsyncGenerator[tuple[str, dict[str, Any]], None]:
         seen = -1
         while True:
             async with self._new:
