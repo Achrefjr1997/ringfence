@@ -5,6 +5,7 @@ from packages.contracts.audio import (
     RoleHint,
     SessionDescriptor,
 )
+from packages.contracts.events import EventBus, InProcessBus
 from packages.contracts.risk import (
     Contribution,
     Decision,
@@ -23,7 +24,9 @@ __all__ = [
     "AttributedTurn",
     "Contribution",
     "Decision",
+    "EventBus",
     "Frame",
+    "InProcessBus",
     "LegSpec",
     "Mode",
     "Role",
