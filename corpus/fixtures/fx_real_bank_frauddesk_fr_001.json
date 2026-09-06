@@ -23,7 +23,7 @@
      "expect_signals": ["OFFER_CALLBACK"]},
     {"t_start": 29.0, "t_end": 34.0, "role": "CALLER",
      "text": "La carte reste bloquée jusqu'à demain, une nouvelle vous sera envoyée par courrier.",
-     "expect_signals": ["NO_ACTION_ASKED"]}
+     "expect_signals": []}
   ],
   "expect_final_state": "CALM",
   "expect_alert_before_t": null

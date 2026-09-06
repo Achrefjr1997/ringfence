@@ -93,15 +93,6 @@ OFFER_CALLBACK:
   - "raccrochez et appelez la banque"
   - "contactez-nous au numéro officiel"
   - "appelez le service client"
-NO_ACTION_ASKED:
-  - "aucun paiement n'est nécessaire"
-  - "rien à payer"
-  - "aucune action requise"
-  - "vous n'avez rien à faire"
-  - "aucun virement nécessaire"
-  - "rien à transférer"
-  - "aucun paiement"
-  - "rien n'est demandé"
 BRANCH_REFERRAL:
   - "passez en agence"
   - "rendez-vous en agence"

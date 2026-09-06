@@ -93,15 +93,6 @@ OFFER_CALLBACK:
   - "phone us back"
   - "reach us at the number on the back of your card"
   - "call the bank yourself"
-NO_ACTION_ASKED:
-  - "no payment needed"
-  - "nothing to pay"
-  - "no action required"
-  - "no money needed"
-  - "you don't need to do anything"
-  - "no transfer required"
-  - "nothing is required"
-  - "no payment necessary"
 BRANCH_REFERRAL:
   - "visit your branch"
   - "go to any branch"

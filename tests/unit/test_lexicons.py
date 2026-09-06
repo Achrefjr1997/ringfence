@@ -17,7 +17,6 @@ TIER1 = (
 PROTECTIVE = (
     "REFUSE_SECRETS",
     "OFFER_CALLBACK",
-    "NO_ACTION_ASKED",
     "BRANCH_REFERRAL",
 )
 
@@ -46,3 +45,15 @@ def test_rejects_unknown_signal_key(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(lexicons_module, "LEXICON_DIR", tmp_path)
     with pytest.raises(ValueError, match="unknown signal"):
         load_lexicons("en")
+
+
+@pytest.mark.parametrize("lang", LANGUAGES)
+def test_no_action_asked_is_not_lexicon_driven(lang: str) -> None:
+    """NO_ACTION_ASKED is an absence over the whole call, not a phrase.
+
+    A scammer saying "no payment needed, just verify" would earn an
+    unearned -20. It is derived at scoring time (T-1.5), never matched
+    lexically — so it must not appear in any lexicon file.
+    """
+    lex = load_lexicons(lang)
+    assert "NO_ACTION_ASKED" not in lex
