@@ -1,0 +1,28 @@
+# Zero-shot NLI hypotheses per signal (English).
+# Each turn is the premise; the extractor fires a signal when the max
+# entailment probability across that signal's hypotheses clears the pack
+# threshold.  Phrased as statements about the CALLER's utterance.
+AUTH_CLAIM:
+  - "The speaker claims to be calling from a bank, the police, a tax office, or a well-known company."
+  - "The speaker states they represent an official institution or its fraud or security department."
+URGENCY:
+  - "The speaker pressures the listener to act immediately or within minutes."
+  - "The speaker warns that the account will be blocked or closed today unless the listener acts now."
+SECRECY:
+  - "The speaker tells the listener not to discuss this call with anyone, including family or bank staff."
+CALLBACK_SUPPRESS:
+  - "The speaker tells the listener to stay on the line and not to hang up or call the bank back."
+RAIL_UNUSUAL:
+  - "The speaker asks the listener to pay with gift cards, cryptocurrency, a wire transfer, or to move money to a new safe account."
+REMOTE_ACCESS:
+  - "The speaker asks the listener to install an app or grant remote access to their computer or phone."
+VERIF_INVERT:
+  - "The speaker asks the listener to read back a one-time code, PIN, card number, or password."
+EMOTION_LEVER:
+  - "The speaker says a family member is in danger, under arrest, or in an emergency to frighten the listener."
+REFUSE_SECRETS:
+  - "The speaker states that the bank will never ask for the listener's PIN, card number, or one-time code."
+OFFER_CALLBACK:
+  - "The speaker invites the listener to hang up and call back the official number on their card."
+BRANCH_REFERRAL:
+  - "The speaker suggests the listener visit a bank branch or office in person."
