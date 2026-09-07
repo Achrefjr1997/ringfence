@@ -15,6 +15,7 @@ import pytest
 
 from packages.policy.pack import load_pack
 from packages.risk.judge import BoundedJudge, DialogueWindow
+from packages.risk.kb import StaticKnowledgeBase
 
 pytestmark = pytest.mark.needs_ollama
 
@@ -44,7 +45,10 @@ def _judge(timeout_s: float = 20.0) -> BoundedJudge:
         pytest.skip("OLLAMA_API_KEY not set")
     from packages.risk.ollama_judge import OllamaCaller
 
-    return BoundedJudge(OllamaCaller(api_key=key), model=MODEL, timeout_s=timeout_s)
+    # KB attached — this is the production configuration (see _default_judge_factory).
+    return BoundedJudge(
+        OllamaCaller(api_key=key), model=MODEL, timeout_s=timeout_s, kb=StaticKnowledgeBase.load()
+    )
 
 
 SCAM = DialogueWindow(

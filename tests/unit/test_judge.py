@@ -6,6 +6,7 @@ import json
 
 from packages.policy.pack import load_pack
 from packages.risk.judge import BoundedJudge, DialogueWindow, should_trigger
+from packages.risk.kb import StaticKnowledgeBase
 
 PACK = load_pack("config/policy/default.yaml")  # max_adjustment=30, trigger_score=35, budget=12
 CAP = PACK.judge.max_adjustment
@@ -124,6 +125,41 @@ async def test_rationale_is_capped_at_25_words() -> None:
     long = " ".join(["word"] * 60)
     j = BoundedJudge(FakeCaller(_verdict_json(rationale=long)), model="m")
     assert len((await j.evaluate(WINDOW, PACK)).rationale.split()) == 25
+
+
+async def test_kb_examples_are_rendered_into_the_system_prompt() -> None:
+    caller = FakeCaller(_verdict_json())
+    j = BoundedJudge(caller, model="m", kb=StaticKnowledgeBase.load())
+    await j.evaluate(WINDOW, PACK)
+    system = caller.calls[0]["system"]
+    assert isinstance(system, str)
+    assert "Reference patterns" in system
+    assert "bank_impersonation" in system  # a KB family made it in
+    assert "[CALLER]" in system and "[CALLEE]" in system
+
+
+async def test_without_a_kb_the_prompt_has_no_reference_block() -> None:
+    caller = FakeCaller(_verdict_json())
+    await BoundedJudge(caller, model="m").evaluate(WINDOW, PACK)
+    assert "Reference patterns" not in str(caller.calls[0]["system"])
+
+
+async def test_kb_does_not_loosen_the_clamp() -> None:
+    """The KB sharpens reasoning; invariant #3's bound is untouched."""
+    j = BoundedJudge(
+        FakeCaller(_verdict_json(adjustment=9999, verdict="fraud")),
+        model="m",
+        kb=StaticKnowledgeBase.load(),
+    )
+    assert (await j.evaluate(WINDOW, PACK)).adjustment == CAP
+
+
+async def test_kb_prompt_is_bounded() -> None:
+    caller = FakeCaller(_verdict_json())
+    await BoundedJudge(caller, model="m", kb=StaticKnowledgeBase.load()).evaluate(WINDOW, PACK)
+    system = str(caller.calls[0]["system"])
+    # at most _MAX_PROMPT_EXAMPLES excerpt blocks (each opens with "[CALLER]")
+    assert system.count("\n  [CALLER]") <= 12
 
 
 def test_should_trigger_rules() -> None:
