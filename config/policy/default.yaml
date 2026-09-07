@@ -37,11 +37,6 @@ judge:
   max_adjustment: 30
   trigger_score: 35
   max_calls_per_session: 12
-semantic:
-  enabled: false
-  model: MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7
-  threshold: 0.7
-  scale_weight: true
 interventions:
   channels: [in_ear, app_banner, guardian_push]
   cooldown_s: 60

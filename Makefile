@@ -1,8 +1,8 @@
 .PHONY: install test inv lint typecheck check eval run dev-up dev-down
 
 # `test` / `check` skip the markers that need a network key or a heavy model.
-# Run those explicitly: pytest -m needs_key | needs_model | needs_ollama
-LIVE_MARKERS := not needs_key and not needs_model and not needs_ollama
+# Run those explicitly: pytest -m needs_key | needs_ollama
+LIVE_MARKERS := not needs_key and not needs_ollama
 
 install:    ; pip install -e ".[dev]"
 test:       ; pytest -q -m "$(LIVE_MARKERS)"
