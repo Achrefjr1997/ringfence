@@ -37,6 +37,16 @@ _SESSION_MAX_S = 3 * 60 * 60
 _RECONNECT_AT_S = 2 * 60 * 60 + 45 * 60
 _STITCH_CONTEXT_S = 30.0
 
+# v3 streaming rejects audio chunks outside 50–1000 ms; the browser worklet
+# emits 40 ms frames, so we coalesce to ~100 ms before sending.
+_MIN_CHUNK_MS = 50
+_TARGET_CHUNK_MS = 100
+
+# close codes that mean "do not reconnect" — auth (1008) and every 3xxx/4xxx
+# application error (bad chunk duration, quota, …).  Reconnecting on these
+# just storms the session quota.
+_FATAL_CLOSE_CODES = frozenset({1008}) | frozenset(range(3000, 5000))
+
 
 def _turn_from_message(
     msg: dict[str, Any], *, session_id: str, leg_id: str, language: str | None
@@ -100,6 +110,11 @@ class AssemblyAIStream:
         self._runner: asyncio.Task[None] | None = None
         self._session_id = spec.session_id
         self._dropped_frames = 0
+        self._fatal: str | None = None
+        # Coalesce sub-50 ms feeds into ~100 ms chunks the API will accept.
+        self._send_buf = bytearray()
+        self._min_chunk = int(_MIN_CHUNK_MS / 1000 * spec.sample_rate) * 2
+        self._target_chunk = int(_TARGET_CHUNK_MS / 1000 * spec.sample_rate) * 2
         # Rolling acoustic context for session stitching (§5.3).
         self._recent: deque[bytes] = deque()
         self._recent_bytes = 0
@@ -121,8 +136,10 @@ class AssemblyAIStream:
             {self._runner, asyncio.create_task(self._connected.wait())},
             return_when=asyncio.FIRST_COMPLETED,
         )
-        if self._runner in done:  # connection failed before it came up
-            self._runner.result()
+        if self._runner in done:  # finished before it came up
+            self._runner.result()  # re-raise a connect exception
+        if self._fatal is not None and not self._connected.is_set():
+            raise RuntimeError(f"AssemblyAI refused the stream: {self._fatal}")
 
     async def _run(self) -> None:
         try:
@@ -146,13 +163,14 @@ class AssemblyAIStream:
                             task.cancel()
                         with contextlib.suppress(Exception):
                             await asyncio.gather(sender, receiver, timer, return_exceptions=True)
+                    if self._fatal is not None:
+                        break  # auth / quota / protocol error — do not reconnect
                     if (
                         receiver.done()
                         and not receiver.cancelled()
                         and receiver.exception() is None
                     ):
-                        # clean Termination from the server
-                        break
+                        break  # clean Termination from the server
                     # otherwise: reconnect timer fired or socket dropped — loop
         finally:
             self._ws = None
@@ -183,27 +201,42 @@ class AssemblyAIStream:
                             language=self._spec.language,
                         )
                     )
+                elif kind == "Error":
+                    self._fatal = str(msg.get("error", "unknown error"))
+                    return
                 elif kind == "Termination":
                     return
-        except ConnectionClosed:
-            raise
+        except ConnectionClosed as exc:
+            code = getattr(exc, "code", None)
+            if code in _FATAL_CLOSE_CODES:
+                self._fatal = self._fatal or f"connection closed {code}"
+                return
+            raise  # transient — let _run reconnect
 
     async def _resend_context(self) -> None:
-        for frame in list(self._recent):
+        blob = b"".join(self._recent)
+        for i in range(0, len(blob), self._target_chunk):
             with contextlib.suppress(asyncio.QueueFull):
-                self._out.put_nowait(frame)
+                self._out.put_nowait(blob[i : i + self._target_chunk])
 
     # -- ASRStream -------------------------------------------------------
+
+    def _enqueue(self, chunk: bytes) -> None:
+        try:
+            self._out.put_nowait(chunk)
+        except asyncio.QueueFull:
+            self._dropped_frames += 1  # drop, never block the capture path
 
     async def feed(self, pcm: bytes) -> None:
         self._recent.append(pcm)
         self._recent_bytes += len(pcm)
         while self._recent_bytes > self._ctx_cap and len(self._recent) > 1:
             self._recent_bytes -= len(self._recent.popleft())
-        try:
-            self._out.put_nowait(pcm)
-        except asyncio.QueueFull:
-            self._dropped_frames += 1  # drop, never block the capture path
+
+        self._send_buf += pcm
+        while len(self._send_buf) >= self._target_chunk:
+            self._enqueue(bytes(self._send_buf[: self._target_chunk]))
+            del self._send_buf[: self._target_chunk]
 
     async def turns(self) -> AsyncIterator[Turn]:
         while True:
@@ -215,6 +248,9 @@ class AssemblyAIStream:
     async def close(self) -> None:
         if self._closed.is_set():
             return
+        if len(self._send_buf) >= self._min_chunk:
+            self._enqueue(bytes(self._send_buf))  # flush the tail
+        self._send_buf.clear()
         ws = self._ws
         if ws is not None:
             with contextlib.suppress(Exception):
@@ -227,6 +263,10 @@ class AssemblyAIStream:
     @property
     def dropped_frames(self) -> int:
         return self._dropped_frames
+
+    @property
+    def fatal(self) -> str | None:
+        return self._fatal
 
 
 class AssemblyAIStreaming:

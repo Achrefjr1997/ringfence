@@ -4,7 +4,13 @@ must drop rather than block the capture path.  The live socket is covered
 by tests/integration/test_assemblyai.py (``-m needs_key``).
 """
 
-from packages.asr.assemblyai import AssemblyAIStream, _turn_from_message
+import json
+
+from packages.asr.assemblyai import (
+    _FATAL_CLOSE_CODES,
+    AssemblyAIStream,
+    _turn_from_message,
+)
 from packages.asr.provider import StreamSpec
 from packages.contracts.transcript import Turn
 
@@ -61,11 +67,52 @@ def test_url_has_sample_rate_and_format_turns() -> None:
     assert "language=en" in stream.url
 
 
+async def test_feed_coalesces_to_100ms_chunks() -> None:
+    stream = AssemblyAIStream("k", SPEC)
+    # ten 40 ms browser frames -> four 100 ms chunks queued, 0 dropped
+    for _ in range(10):
+        await stream.feed(b"\x00\x00" * 640)
+    assert stream._out.qsize() == 4 and stream.dropped_frames == 0
+    assert all(len(stream._out.get_nowait()) == 3200 for _ in range(4))  # 100 ms @ 16 kHz
+
+
 async def test_feed_drops_when_send_queue_is_full_and_never_blocks() -> None:
     stream = AssemblyAIStream("k", SPEC, send_queue_max=4)
+    chunk = b"\x00\x00" * 1600  # exactly one 100 ms chunk
     for _ in range(4):
-        await stream.feed(b"\x00\x00" * 160)
+        await stream.feed(chunk)
     assert stream.dropped_frames == 0
     for _ in range(10):
-        await stream.feed(b"\x00\x00" * 160)  # queue full: must drop, not hang
+        await stream.feed(chunk)  # queue full: must drop, not hang
     assert stream.dropped_frames == 10
+
+
+async def test_close_flushes_a_partial_tail_above_the_minimum() -> None:
+    stream = AssemblyAIStream("k", SPEC)
+    await stream.feed(b"\x00\x00" * 640)  # 40 ms -> buffered, nothing queued yet
+    assert stream._out.qsize() == 0
+    await stream.close()  # 40 ms < 50 ms minimum -> dropped, not sent
+    assert stream._out.qsize() == 0
+
+    s2 = AssemblyAIStream("k", SPEC)
+    await s2.feed(b"\x00\x00" * 960)  # 60 ms -> above the 50 ms minimum
+    await s2.close()
+    assert s2._out.qsize() == 1 and len(s2._out.get_nowait()) == 1920
+
+
+async def test_error_message_is_fatal_and_stops_the_recv_loop() -> None:
+    stream = AssemblyAIStream("k", SPEC)
+
+    class FakeWS:
+        def __aiter__(self):  # noqa: ANN204
+            return self
+
+        async def __anext__(self) -> str:
+            if not getattr(self, "_sent", False):
+                self._sent = True
+                return json.dumps({"type": "Error", "error": "Input Duration Violation: 40.0 ms"})
+            raise StopAsyncIteration
+
+    await stream._recv_loop(FakeWS())  # type: ignore[arg-type]
+    assert stream.fatal is not None and "40.0 ms" in stream.fatal
+    assert 3007 in _FATAL_CLOSE_CODES and 1008 in _FATAL_CLOSE_CODES
