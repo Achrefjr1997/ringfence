@@ -75,7 +75,9 @@ VERIF_INVERT:
   - "quel est votre numéro de carte"
   - "le numéro complet de votre carte"
   - "donnez-moi le code"
-  - "le code reçu par sms"
+  # "le code reçu par sms" removed (R-A): no imperative verb, so it also
+  # matched a bank *refusing* to ask for it. "lisez-moi le code" / "lisez
+  # le code" / "donnez-moi le code" cover the actual ask.
   - "votre code secret"
   - "code de sécurité"
   - "lisez le code"
