@@ -38,3 +38,23 @@ jobs:
         run: |
           pytest -q -m invariant \
             || { echo '::error title=INVARIANT REGRESSION::a non-negotiable invariant broke — do not merge'; exit 1; }
+
+  # The T-1.7 semantic extractor pulls torch + a ~280 MB model, so it runs in
+  # its own image with a build-time-warmed HF cache. gha layer caching keeps
+  # the torch/model layers off the critical path once primed.
+  semantic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: build semantic image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/Dockerfile.semantic
+          load: true
+          tags: rf-semantic:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: needs_model tests
+        run: docker run --rm rf-semantic:ci pytest -q -m needs_model

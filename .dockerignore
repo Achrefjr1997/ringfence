@@ -1,0 +1,17 @@
+.git
+.github
+.venv
+**/__pycache__
+**/*.pyc
+.env
+.env.*
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+.coverage
+reports/
+docs/
+# untracked local demo helpers
+feed_call.py
+corpus/fixtures/audio/ringbank_takeover_16k.wav

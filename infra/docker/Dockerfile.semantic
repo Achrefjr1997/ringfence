@@ -1,0 +1,33 @@
+# Image for the T-1.7 zero-shot semantic extractor: the `semantic` extra
+# (CPU-only torch + transformers) plus a pre-baked mDeBERTa cache, so the
+# `needs_model` test suite runs with no download at container start.
+#
+#   docker build -f infra/docker/Dockerfile.semantic -t rf-semantic .
+#   docker run --rm rf-semantic                 # runs `pytest -m needs_model`
+#   docker run --rm rf-semantic pytest -q       # or the full suite
+
+FROM python:3.12-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libsndfile1 \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV HF_HOME=/opt/hf-cache \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+
+# CPU-only torch first, so the "torch==2.*" pin in [semantic] is already
+# satisfied and pip does not pull the ~2 GB CUDA wheel.
+RUN pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.*"
+
+COPY . .
+RUN pip install -e ".[dev,semantic]"
+
+# Warm the cache with the exact model the extractor uses.
+RUN python -c "from packages.risk.hf_zeroshot import HFZeroShotClassifier; \
+HFZeroShotClassifier().score('warm the cache', ['this is a warmup'])"
+
+CMD ["pytest", "-q", "-m", "needs_model"]
