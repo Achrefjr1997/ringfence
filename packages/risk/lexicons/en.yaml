@@ -11,6 +11,7 @@ AUTH_CLAIM:
   - "this is amazon security"
   - "this is amazon fraud prevention"
   - "i am from the ministry"
+  - "social security administration"  # mined 2026-09-08 (scripts/mine_lexicon.py), reviewed
 URGENCY:
   - "immediately"
   - "right now"
@@ -23,6 +24,8 @@ URGENCY:
   - "before it is too late"
   - "you must do it today"
   - "as soon as possible"
+  - "act quickly"  # mined 2026-09-08, reviewed
+  - "act fast"
 SECRECY:
   - "don't tell anyone"
   - "do not tell anyone"
@@ -56,6 +59,9 @@ RAIL_UNUSUAL:
   - "itunes card"
   - "prepaid card"
   - "transfer the money"
+  - "prepaid debit card"  # mined 2026-09-08, reviewed
+  - "purchase a prepaid"
+  - "purchase a gift card"
 REMOTE_ACCESS:
   - "anydesk"
   - "teamviewer"
@@ -67,6 +73,9 @@ REMOTE_ACCESS:
   - "download this application"
   - "share your screen"
   - "allow remote control"
+  - "access your computer"  # mined 2026-09-08, reviewed
+  - "access your laptop"
+  - "remotely access"
 VERIF_INVERT:
   - "read me the code"
   - "read me the gift card code"
@@ -79,6 +88,8 @@ VERIF_INVERT:
   - "read me the numbers"
   - "give me your pin"
   - "type in your password"
+  - "confirm your social security number"  # mined 2026-09-08, reviewed
+  - "card number and pin"
 REFUSE_SECRETS:
   - "we will never ask for your code"
   - "we never ask for your card number"
