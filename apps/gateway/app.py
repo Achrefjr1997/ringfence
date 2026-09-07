@@ -16,6 +16,7 @@ import json
 import logging
 import mimetypes
 import os
+import secrets
 import time
 from collections import Counter
 from collections.abc import AsyncIterator, Callable
@@ -30,10 +31,13 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from apps.gateway.auth import build_auth_routes
 from packages.asr.null import NullASR
 from packages.asr.provider import ASRProvider, StreamSpec
 from packages.contracts.audio import Frame, LegSpec, Mode, RoleHint, SessionDescriptor
 from packages.contracts.events import EventBus, InProcessBus
+from packages.contracts.settings import get_settings
+from packages.identity.store import IdentityStore, InMemoryIdentityStore
 from packages.intervene.cases import Case, CaseStore
 from packages.pipeline.pipeline import Pipeline
 from packages.policy.pack import PolicyPack, load_pack
@@ -165,6 +169,8 @@ def create_app(
     pack: PolicyPack | None = None,
     bus: EventBus | None = None,
     case_store: CaseStore | None = None,
+    identity: IdentityStore | None = None,
+    session_secret: str | None = None,
     tenants: TenantRegistry | None = None,
     quota_per_tenant: int | None = None,
     capacity: int = 500,
@@ -174,6 +180,11 @@ def create_app(
     the_bus = bus or InProcessBus()
     the_cases = case_store or CaseStore()
     the_tenants = tenants or load_tenants()
+    the_identity: IdentityStore = identity or InMemoryIdentityStore()
+    the_secret = session_secret or get_settings().session_secret
+    if not the_secret:
+        the_secret = secrets.token_urlsafe(32)
+        log.warning("RF_SESSION_SECRET unset - auth tokens will not survive a restart")
     make_provider = provider_factory or _default_provider_factory()
     the_judge = (judge_factory or _default_judge_factory())(the_pack)
     metrics = GatewayMetrics()
@@ -362,6 +373,7 @@ def create_app(
         Route("/cases", list_cases),
         Route("/cases/{session_id}", get_case),
         Route("/cases/{session_id}/feedback", post_feedback, methods=["POST"]),
+        *build_auth_routes(the_identity, the_secret),
         WebSocketRoute("/ws/capture", capture),
     ]
     console = Path(__file__).resolve().parents[1] / "console"
@@ -372,4 +384,6 @@ def create_app(
     app.state.metrics = metrics
     app.state.bus = the_bus
     app.state.sessions = sessions
+    app.state.identity = the_identity
+    app.state.session_secret = the_secret
     return app
