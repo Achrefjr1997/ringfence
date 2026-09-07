@@ -23,14 +23,12 @@ from packages.media.role import RoleAttributor, StubRoleAttributor, role_for_hin
 from packages.policy.pack import PolicyPack, load_pack
 from packages.risk.combos import evaluate_combos
 from packages.risk.derived import evaluate_derived
-from packages.risk.hypotheses import load_hypotheses
 from packages.intervene.cases import CaseStore
 from packages.risk.judge import DialogueWindow, Judge, should_trigger
 from packages.risk.lexical import LexicalExtractor
 from packages.risk.lexicons import load_lexicons
 from packages.risk.numeric import NumericExtractor
 from packages.risk.scoring import EvidenceWindow, score_window
-from packages.risk.semantic import SemanticExtractor, ZeroShotClassifier
 from packages.risk.state import RiskStateMachine
 from packages.session.manager import CloseReason, SessionManager, SessionState
 
@@ -60,7 +58,6 @@ class Pipeline:
         pack: PolicyPack | None = None,
         bus: EventBus | None = None,
         session_manager: SessionManager | None = None,
-        semantic: ZeroShotClassifier | None = None,
         judge: Judge | None = None,
         case_store: CaseStore | None = None,
     ) -> None:
@@ -68,7 +65,6 @@ class Pipeline:
         self._pack = pack or _DEFAULT_PACK
         self._bus = bus
         self._sm = session_manager or SessionManager(bus=bus)
-        self._semantic = semantic
         self._judge = judge
         self._cases = case_store
         self._last_judge_t: float | None = None
@@ -84,7 +80,6 @@ class Pipeline:
         self._machine: RiskStateMachine | None = None
         self._lexical: LexicalExtractor | None = None
         self._numeric: NumericExtractor | None = None
-        self._sem_ex: SemanticExtractor | None = None
 
         self._peak_score = 0.0
         self._peak_state: State = "CALM"
@@ -113,14 +108,6 @@ class Pipeline:
                 lexicons.setdefault(sid, []).extend(spec.extra_terms)
         self._lexical = LexicalExtractor(lexicons, weights)
         self._numeric = NumericExtractor(weights)
-        if self._semantic is not None and lang in ("en", "fr"):
-            self._sem_ex = SemanticExtractor(
-                load_hypotheses(lang),
-                weights,
-                self._semantic,
-                threshold=self._pack.semantic.threshold,
-                scale_weight=self._pack.semantic.scale_weight,
-            )
         self._machine = RiskStateMachine(self._pack, session_id=desc.session_id)
 
         sr = desc.legs[0].sample_rate if desc.legs else 16_000
@@ -173,8 +160,6 @@ class Pipeline:
             at = AttributedTurn(turn=turn, role=role, role_confidence=1.0)
             self._transcript.append((at.role, turn.text, turn.t_end))
             hits = [*self._lexical.extract(at), *self._numeric.extract(at)]
-            if self._sem_ex is not None:
-                hits += self._sem_ex.extract(at)
             for hit in hits:
                 self._window.add(hit)
 

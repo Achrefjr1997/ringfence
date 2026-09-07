@@ -29,7 +29,7 @@ jobs:
         run: mypy packages apps
 
       - name: tests
-        run: pytest -q -m "not needs_key and not needs_model and not needs_ollama"
+        run: pytest -q -m "not needs_key and not needs_ollama and not needs_dataset"
 
       # A broken invariant is a distinct, obvious build failure — not buried in
       # the test run above.

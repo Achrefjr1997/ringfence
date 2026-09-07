@@ -15,16 +15,14 @@ from dataclasses import dataclass, field
 
 from packages.contracts.risk import Contribution, Decision, State
 from packages.contracts.transcript import AttributedTurn
-from packages.eval.fixtures import fixture_turns, load_fixture
+from packages.eval.fixtures import Fixture, fixture_turns, load_fixture
 from packages.policy.pack import PolicyPack, load_pack
 from packages.risk.combos import evaluate_combos
 from packages.risk.derived import evaluate_derived
 from packages.risk.lexical import LexicalExtractor
 from packages.risk.lexicons import load_lexicons
-from packages.risk.hypotheses import load_hypotheses
 from packages.risk.numeric import NumericExtractor
 from packages.risk.scoring import EvidenceWindow, score_window
-from packages.risk.semantic import SemanticExtractor, ZeroShotClassifier
 from packages.risk.state import RiskStateMachine
 
 DEFAULT_PACK = load_pack("config/policy/default.yaml")
@@ -120,17 +118,26 @@ def run_fixture(
     fixture_id: str,
     *,
     pack: PolicyPack | None = None,
-    semantic: ZeroShotClassifier | None = None,
 ) -> FixtureResult:
-    """Replay a fixture through the offline engine.
+    """Load ``fixture_id`` from ``corpus/fixtures/`` and replay it — see
+    :func:`replay_fixture`."""
+    return replay_fixture(load_fixture(fixture_id), pack=pack)
 
-    ``semantic`` opts in the zero-shot NLI extractor (T-1.7): pass a
-    classifier and it runs alongside the lexical/numeric extractors, using
-    the hypotheses in ``risk.hypotheses`` and the pack's ``semantic``
-    threshold.  Left off, the run stays deterministic and dependency-free.
+
+def replay_fixture(
+    fx: Fixture,
+    *,
+    pack: PolicyPack | None = None,
+) -> FixtureResult:
+    """Replay a :class:`Fixture` through the offline engine — lexical +
+    numeric extractors -> evidence window -> combos -> derived -> scoring ->
+    state machine, deterministic and dependency-free.
+
+    Takes the ``Fixture`` object directly so callers that build fixtures in
+    memory (the external benchmark, ``eval.external``) share this exact
+    path with the hand-written corpus.
     """
     pack = pack or DEFAULT_PACK
-    fx = load_fixture(fixture_id)
 
     weights = {sid: spec.weight for sid, spec in pack.signals.items()}
     lexicons = load_lexicons(fx.language)
@@ -139,16 +146,6 @@ def run_fixture(
             lexicons.setdefault(sid, []).extend(spec.extra_terms)
     lexical = LexicalExtractor(lexicons, weights)
     numeric = NumericExtractor(weights)
-
-    semantic_extractor: SemanticExtractor | None = None
-    if semantic is not None and fx.language in ("en", "fr"):
-        semantic_extractor = SemanticExtractor(
-            load_hypotheses(fx.language),
-            weights,
-            semantic,
-            threshold=pack.semantic.threshold,
-            scale_weight=pack.semantic.scale_weight,
-        )
 
     window = EvidenceWindow()
     machine = RiskStateMachine(pack, session_id=fx.id)
@@ -163,8 +160,6 @@ def run_fixture(
     for turn, ft in zip(fixture_turns(fx), fx.turns, strict=True):
         at = AttributedTurn(turn=turn, role=ft.role, role_confidence=1.0)
         hits = [*lexical.extract(at), *numeric.extract(at)]
-        if semantic_extractor is not None:
-            hits += semantic_extractor.extract(at)
         for hit in hits:
             window.add(hit)
 

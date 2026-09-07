@@ -64,16 +64,6 @@ class JudgeConfig(BaseModel):
     max_calls_per_session: int = 12
 
 
-class SemanticConfig(BaseModel):
-    """Zero-shot NLI extractor (T-1.7). Off by default: the invariant
-    suite must stay deterministic and offline."""
-
-    enabled: bool = False
-    model: str = "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7"
-    threshold: float = 0.7
-    scale_weight: bool = True
-
-
 class InterventionsConfig(BaseModel):
     channels: list[str] = Field(default_factory=list)
     cooldown_s: float = 60.0
@@ -89,7 +79,6 @@ class PolicyPack(BaseModel):
     signals: dict[str, SignalSpec]
     combos: dict[str, ComboSpec] = Field(default_factory=dict)
     judge: JudgeConfig = Field(default_factory=JudgeConfig)
-    semantic: SemanticConfig = Field(default_factory=SemanticConfig)
     interventions: InterventionsConfig = Field(default_factory=InterventionsConfig)
 
     @model_validator(mode="after")

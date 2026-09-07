@@ -13,7 +13,6 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest==8.*", "pytest-asyncio==0.24.*", "pytest-cov==5.*",
        "ruff==0.7.*", "mypy==1.13.*"]
-semantic = ["transformers==4.*", "torch==2.*"]
 judge = ["ollama>=0.4"]
 
 [tool.setuptools.packages.find]
@@ -26,8 +25,8 @@ testpaths = ["tests"]
 markers = [
   "invariant: must never regress",
   "needs_key: requires ASSEMBLYAI_API_KEY",
-  "needs_model: requires the 'semantic' extra (transformers + torch)",
   "needs_ollama: requires the 'judge' extra and OLLAMA_API_KEY",
+  "needs_dataset: requires the vendored external benchmark snapshot (corpus/external/)",
 ]
 
 [tool.ruff]

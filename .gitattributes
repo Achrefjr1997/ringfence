@@ -1,0 +1,3 @@
+# Vendored benchmark snapshots and any other compressed blobs: never munge.
+*.gz binary
+*.wav binary
