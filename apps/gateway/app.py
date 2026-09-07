@@ -88,7 +88,7 @@ def _default_judge_factory() -> JudgeFactory:
             log.warning("judge enabled in pack but OLLAMA_API_KEY not set - running rules-only")
             return None
         from packages.risk.judge import BoundedJudge
-        from packages.risk.kb import StaticKnowledgeBase
+        from packages.risk.kb import BM25KnowledgeBase, KnowledgeBase
         from packages.risk.ollama_judge import OllamaCaller
 
         try:
@@ -97,7 +97,7 @@ def _default_judge_factory() -> JudgeFactory:
             log.warning("judge enabled but unavailable (%s) - running rules-only", exc)
             return None
         try:
-            kb: StaticKnowledgeBase | None = StaticKnowledgeBase.load()
+            kb: KnowledgeBase | None = BM25KnowledgeBase.load()
         except (OSError, ValueError) as exc:  # a bad KB must not disable the judge
             log.warning("scam knowledge base unavailable (%s) - judge runs without it", exc)
             kb = None
