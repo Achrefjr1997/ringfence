@@ -58,7 +58,7 @@ class ComboSpec(BaseModel):
 
 class JudgeConfig(BaseModel):
     enabled: bool = True
-    model: str = "ring-judge-2026-08"
+    model: str = "gpt-oss:120b"  # Ollama Cloud model id (risk.ollama_judge)
     max_adjustment: int = 30
     trigger_score: float = 35.0
     max_calls_per_session: int = 12

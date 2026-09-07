@@ -33,7 +33,7 @@ combos:
   COMBO_CLASSIC: { bonus: 45, window_s: 120 }
 judge:
   enabled: true
-  model: ring-judge-2026-08
+  model: gpt-oss:120b
   max_adjustment: 30
   trigger_score: 35
   max_calls_per_session: 12
