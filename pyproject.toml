@@ -26,6 +26,7 @@ markers = [
   "invariant: must never regress",
   "needs_key: requires ASSEMBLYAI_API_KEY",
   "needs_ollama: requires the 'judge' extra and OLLAMA_API_KEY",
+  "needs_dataset: requires the vendored external benchmark snapshot (corpus/external/)",
 ]
 
 [tool.ruff]
