@@ -110,7 +110,9 @@ def test_dev_mode_still_admits_on_a_bare_tenant_param() -> None:
     assert c.get("/health").json()["metrics"]["admitted"] == 1
 
 
-@pytest.mark.parametrize("path", ["/ws/capture?session=s&leg=far", "/ws/capture?session=s&leg=far&key=rf_bogus"])
+@pytest.mark.parametrize(
+    "path", ["/ws/capture?session=s&leg=far", "/ws/capture?session=s&leg=far&key=rf_bogus"]
+)
 def test_bad_or_missing_key_is_auth_rejected(path: str) -> None:
     c = _client(dev_mode=False)
     with c.websocket_connect(path) as ws:

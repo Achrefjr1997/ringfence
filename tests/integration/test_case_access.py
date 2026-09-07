@@ -79,8 +79,18 @@ def test_cross_org_read_is_404_not_403() -> None:
 
 def test_feedback_requires_operator_and_the_right_org() -> None:
     c, t = _setup()
-    assert c.post("/cases/caseA/feedback", json={"label": "fraud"}, headers=_hdr(t["guard_a"])).status_code == 403
-    assert c.post("/cases/caseA/feedback", json={"label": "benign"}, headers=_hdr(t["admin_b"])).status_code == 404
+    assert (
+        c.post(
+            "/cases/caseA/feedback", json={"label": "fraud"}, headers=_hdr(t["guard_a"])
+        ).status_code
+        == 403
+    )
+    assert (
+        c.post(
+            "/cases/caseA/feedback", json={"label": "benign"}, headers=_hdr(t["admin_b"])
+        ).status_code
+        == 404
+    )
 
     ok = c.post("/cases/caseA/feedback", json={"label": "fraud"}, headers=_hdr(t["op_a"]))
     assert ok.status_code == 200 and ok.json()["feedback"] == "fraud"

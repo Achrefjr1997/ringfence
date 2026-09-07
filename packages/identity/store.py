@@ -28,9 +28,7 @@ class IdentityStore(Protocol):
         self, *, org_name: str, email: str, password: str
     ) -> tuple[Org, User]: ...
 
-    def add_user(
-        self, *, org_id: str, email: str, password: str, role: Role
-    ) -> User: ...
+    def add_user(self, *, org_id: str, email: str, password: str, role: Role) -> User: ...
 
     def get_user(self, user_id: str) -> User | None: ...
 
@@ -73,13 +71,9 @@ class InMemoryIdentityStore:
     def add_user(self, *, org_id: str, email: str, password: str, role: Role) -> User:
         if org_id not in self._orgs:
             raise IdentityError(f"no such org {org_id}")
-        return self._add(
-            org_id=org_id, email=email, password=password, role=role, verified=False
-        )
+        return self._add(org_id=org_id, email=email, password=password, role=role, verified=False)
 
-    def _add(
-        self, *, org_id: str, email: str, password: str, role: Role, verified: bool
-    ) -> User:
+    def _add(self, *, org_id: str, email: str, password: str, role: Role, verified: bool) -> User:
         user = User(
             org_id=org_id,
             email=email,

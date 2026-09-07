@@ -11,9 +11,7 @@ SECRET = "test-session-secret"
 
 
 def _client() -> TestClient:
-    return TestClient(
-        create_app(provider_factory=lambda spec: NullASR([]), session_secret=SECRET)
-    )
+    return TestClient(create_app(provider_factory=lambda spec: NullASR([]), session_secret=SECRET))
 
 
 def _signup(c: TestClient, **over: str) -> dict:
@@ -54,9 +52,14 @@ def test_signup_bad_input_is_400(over: dict) -> None:
 def test_login_ok_wrong_password_and_unknown_email() -> None:
     c = _client()
     _signup(c, email="l@acme.co")
-    assert c.post("/auth/login", json={"email": "l@acme.co", "password": "pw-12345678"}).status_code == 200
+    assert (
+        c.post("/auth/login", json={"email": "l@acme.co", "password": "pw-12345678"}).status_code
+        == 200
+    )
     assert c.post("/auth/login", json={"email": "l@acme.co", "password": "nope"}).status_code == 401
-    assert c.post("/auth/login", json={"email": "ghost@acme.co", "password": "x"}).status_code == 401
+    assert (
+        c.post("/auth/login", json={"email": "ghost@acme.co", "password": "x"}).status_code == 401
+    )
 
 
 def test_whoami_needs_a_valid_bearer_token() -> None:
