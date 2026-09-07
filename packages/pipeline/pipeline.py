@@ -241,7 +241,10 @@ class Pipeline:
             if decision is not None:
                 self._decisions.append(decision)
                 if self._cases is not None and _RANK[decision.state] >= _RANK["ALERT"]:
-                    self._cases.record(decision.session_id, decision, self._transcript)
+                    tenant = self._desc.tenant_id if self._desc is not None else ""
+                    self._cases.record(
+                        decision.session_id, decision, self._transcript, tenant=tenant
+                    )
                 if self._bus is not None and self._desc is not None:
                     await self._bus.publish(
                         f"rf.{self._desc.tenant_id}.decision",

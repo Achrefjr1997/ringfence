@@ -14,6 +14,7 @@ def _client(fixture_id: str) -> TestClient:
     app = create_app(
         provider_factory=lambda spec: NullASR(fixture_turns(fx), speed=400.0),
         judge_factory=lambda pack: None,  # keep the suite offline regardless of local .env
+        dev_mode=True,  # case routes without auth; T-7.1d access control is test_case_access
         bus=InProcessBus(),
     )
     return TestClient(app)

@@ -31,13 +31,14 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from apps.gateway.auth import build_auth_routes
+from apps.gateway.auth import authenticate, build_auth_routes
 from apps.gateway.orgs import build_org_routes
 from packages.asr.null import NullASR
 from packages.asr.provider import ASRProvider, StreamSpec
 from packages.contracts.audio import Frame, LegSpec, Mode, RoleHint, SessionDescriptor
 from packages.contracts.events import EventBus, InProcessBus
 from packages.contracts.settings import get_settings
+from packages.identity.models import User
 from packages.identity.store import IdentityStore, InMemoryIdentityStore
 from packages.intervene.cases import Case, CaseStore
 from packages.pipeline.pipeline import Pipeline
@@ -146,6 +147,16 @@ def _serialise_case(case: Case) -> dict[str, object]:
             for d in case.decisions
         ],
     }
+
+
+def _serialise_verdict(case: Case) -> dict[str, object]:
+    """Guardian view — the full decision chain, no transcript text."""
+    data = _serialise_case(case)
+    data.pop("transcript", None)
+    return data
+
+
+_CASE_ROLES = frozenset({"admin", "operator", "guardian"})
 
 
 def _default_provider_factory() -> ProviderFactory:
@@ -312,7 +323,25 @@ def create_app(
 
         return EventSourceResponse(stream())
 
-    async def list_cases(_: Request) -> JSONResponse:
+    def case_access(request: Request) -> tuple[User | None, JSONResponse | None]:
+        """``(user, error)``.  In ``dev_mode`` returns ``(None, None)`` — no
+        auth, every case visible (the current local/demo behaviour)."""
+        if dev_mode:
+            return None, None
+        user = authenticate(request, the_identity, the_secret)
+        if user is None:
+            return None, JSONResponse({"error": "unauthenticated"}, status_code=401)
+        if user.role not in _CASE_ROLES:
+            return None, JSONResponse({"error": "forbidden"}, status_code=403)
+        return user, None
+
+    async def list_cases(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        cases = the_cases.list()
+        if user is not None:
+            cases = [c for c in cases if c.tenant == user.org_id]
         return JSONResponse(
             [
                 {
@@ -322,18 +351,32 @@ def create_app(
                     "peak_score": round(c.peak_score, 1),
                     "feedback": c.feedback,
                 }
-                for c in the_cases.list()
+                for c in cases
             ]
         )
 
     async def get_case(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
         case = the_cases.get(request.path_params["session_id"])
-        if case is None:
+        if case is None or (user is not None and case.tenant != user.org_id):
             return JSONResponse({"error": "no such case"}, status_code=404)
+        if user is not None and user.role == "guardian":
+            return JSONResponse(_serialise_verdict(case))
         return JSONResponse(_serialise_case(case))
 
     async def post_feedback(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        if user is not None and user.role == "guardian":
+            return JSONResponse({"error": "forbidden"}, status_code=403)
         session_id = request.path_params["session_id"]
+        if user is not None:
+            existing = the_cases.get(session_id)
+            if existing is None or existing.tenant != user.org_id:
+                return JSONResponse({"error": "no such case"}, status_code=404)
         body = await request.json()
         try:
             case = the_cases.set_feedback(
@@ -439,4 +482,5 @@ def create_app(
     app.state.sessions = sessions
     app.state.identity = the_identity
     app.state.session_secret = the_secret
+    app.state.cases = the_cases
     return app

@@ -24,6 +24,7 @@ _RANK: dict[State, int] = {"CALM": 0, "WATCH": 1, "ALERT": 2, "INTERVENE": 3, "R
 class Case:
     session_id: str
     opened_at: float
+    tenant: str = ""  # the org this case belongs to (T-7.1d access scoping)
     decisions: list[Decision] = field(default_factory=list)
     transcript: list[tuple[Role, str, float]] = field(default_factory=list)
     feedback: FeedbackLabel | None = None
@@ -47,11 +48,13 @@ class CaseStore:
         session_id: str,
         decision: Decision,
         transcript: list[tuple[Role, str, float]],
+        *,
+        tenant: str = "",
     ) -> Case:
         """Upsert the case for ``session_id`` with an ALERT+ decision."""
         case = self._cases.get(session_id)
         if case is None:
-            case = Case(session_id=session_id, opened_at=decision.t)
+            case = Case(session_id=session_id, opened_at=decision.t, tenant=tenant)
             self._cases[session_id] = case
         case.decisions.append(decision)
         case.transcript = list(transcript)
