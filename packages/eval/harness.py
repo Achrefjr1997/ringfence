@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from packages.contracts.risk import Contribution, Decision, State
 from packages.contracts.transcript import AttributedTurn
-from packages.eval.fixtures import fixture_turns, load_fixture
+from packages.eval.fixtures import Fixture, fixture_turns, load_fixture
 from packages.policy.pack import PolicyPack, load_pack
 from packages.risk.combos import evaluate_combos
 from packages.risk.derived import evaluate_derived
@@ -119,11 +119,25 @@ def run_fixture(
     *,
     pack: PolicyPack | None = None,
 ) -> FixtureResult:
-    """Replay a fixture through the offline engine — lexical + numeric
-    extractors -> evidence window -> combos -> derived -> scoring -> state
-    machine, deterministic and dependency-free."""
+    """Load ``fixture_id`` from ``corpus/fixtures/`` and replay it — see
+    :func:`replay_fixture`."""
+    return replay_fixture(load_fixture(fixture_id), pack=pack)
+
+
+def replay_fixture(
+    fx: Fixture,
+    *,
+    pack: PolicyPack | None = None,
+) -> FixtureResult:
+    """Replay a :class:`Fixture` through the offline engine — lexical +
+    numeric extractors -> evidence window -> combos -> derived -> scoring ->
+    state machine, deterministic and dependency-free.
+
+    Takes the ``Fixture`` object directly so callers that build fixtures in
+    memory (the external benchmark, ``eval.external``) share this exact
+    path with the hand-written corpus.
+    """
     pack = pack or DEFAULT_PACK
-    fx = load_fixture(fixture_id)
 
     weights = {sid: spec.weight for sid, spec in pack.signals.items()}
     lexicons = load_lexicons(fx.language)
