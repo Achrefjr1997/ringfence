@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import mimetypes
+import os
 import time
 from collections import Counter
 from collections.abc import AsyncIterator, Callable
@@ -36,7 +38,10 @@ from packages.intervene.cases import Case, CaseStore
 from packages.pipeline.pipeline import Pipeline
 from packages.policy.pack import PolicyPack, load_pack
 from packages.policy.tenants import TenantRegistry, load_tenants, tenant_pattern
+from packages.risk.judge import Judge
 from packages.session.manager import SessionManager
+
+log = logging.getLogger("ringfence.gateway")
 
 _RATE = 16_000  # §3.6 rejection reasons, in check order: TENANT, CONSENT, QUOTA, CAPACITY
 
@@ -45,6 +50,49 @@ _RATE = 16_000  # §3.6 rejection reasons, in check order: TENANT, CONSENT, QUOT
 mimetypes.add_type("text/javascript", ".js")
 
 ProviderFactory = Callable[[StreamSpec], ASRProvider]
+JudgeFactory = Callable[[PolicyPack], Judge | None]
+
+
+def _read_env_key(name: str) -> str | None:
+    """Env var, else a matching line in the repo-root ``.env``."""
+    key = os.environ.get(name)
+    if key:
+        return key
+    env = Path(__file__).resolve().parents[2] / ".env"
+    if env.exists():
+        for line in env.read_text(encoding="utf-8").splitlines():
+            if line.startswith(f"{name}="):
+                return line.split("=", 1)[1].strip() or None
+    return None
+
+
+def _default_judge_factory() -> JudgeFactory:
+    """Build the Tier-2 LLM judge from the pack + ``OLLAMA_API_KEY``.
+
+    Returns ``None`` (judge disabled, no exception) when the pack turns the
+    judge off, the key is absent, or the ``judge`` extra is not installed —
+    the pipeline then runs rules-only, exactly as it did before T-2.6b.
+    """
+
+    def factory(pack: PolicyPack) -> Judge | None:
+        if not pack.judge.enabled:
+            return None
+        key = _read_env_key("OLLAMA_API_KEY")
+        if not key:
+            log.warning("judge enabled in pack but OLLAMA_API_KEY not set - running rules-only")
+            return None
+        from packages.risk.judge import BoundedJudge
+        from packages.risk.ollama_judge import OllamaCaller
+
+        try:
+            caller = OllamaCaller(api_key=key)
+        except RuntimeError as exc:  # 'judge' extra missing
+            log.warning("judge enabled but unavailable (%s) - running rules-only", exc)
+            return None
+        timeout_s = float(os.environ.get("RF_JUDGE_TIMEOUT_S", "0.8"))
+        return BoundedJudge(caller, model=pack.judge.model, timeout_s=timeout_s)
+
+    return factory
 
 
 @dataclass
@@ -113,6 +161,7 @@ def _default_provider_factory() -> ProviderFactory:
 def create_app(
     *,
     provider_factory: ProviderFactory | None = None,
+    judge_factory: JudgeFactory | None = None,
     pack: PolicyPack | None = None,
     bus: EventBus | None = None,
     case_store: CaseStore | None = None,
@@ -126,6 +175,7 @@ def create_app(
     the_cases = case_store or CaseStore()
     the_tenants = tenants or load_tenants()
     make_provider = provider_factory or _default_provider_factory()
+    the_judge = (judge_factory or _default_judge_factory())(the_pack)
     metrics = GatewayMetrics()
     sessions: dict[str, _Live] = {}
     sm = SessionManager(bus=the_bus)
@@ -259,6 +309,7 @@ def create_app(
                 bus=the_bus,
                 session_manager=sm,
                 case_store=the_cases,
+                judge=the_judge,
             )
             role = RoleHint.CALLER if leg == "far" else RoleHint.CALLEE
             await pipe.start(

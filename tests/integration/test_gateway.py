@@ -6,16 +6,38 @@ import json
 import pytest
 from starlette.testclient import TestClient
 
-from apps.gateway.app import create_app
+from apps.gateway.app import _default_judge_factory, create_app
 from packages.asr.null import NullASR
 from packages.contracts.events import InProcessBus
+from packages.contracts.risk import Verdict
 from packages.eval.fixtures import fixture_turns, load_fixture
+from packages.policy.pack import PolicyPack, load_pack
 
 FX = load_fixture("fx_tech_support_en_001")
 
 
+class _RecordingJudge:
+    """Counts evaluate() calls; never touches the network."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def evaluate(self, window: object, pack: object) -> Verdict:
+        self.calls += 1
+        return Verdict(
+            verdict="unclear",
+            adjustment=0,
+            signals=(),
+            protective=(),
+            rationale="recording test judge",
+            model_version="fake",
+            latency_ms=1,
+        )
+
+
 def _app(**kw: object) -> TestClient:
     bus = kw.pop("bus", None) or InProcessBus()
+    kw.setdefault("judge_factory", lambda pack: None)  # tests opt in to the judge explicitly
     app = create_app(
         provider_factory=lambda spec: NullASR(fixture_turns(FX), speed=200.0),
         bus=bus,
@@ -142,6 +164,28 @@ def test_events_are_tenant_scoped_on_the_bus() -> None:
     assert "decision" in subjects  # t1's own events came through
     # a t1 subscriber can only ever match rf.t1.* — t2's session-close can't end it,
     # which is why the stream above ends on t1's own rf.t1.session.closed.
+
+
+def test_judge_is_wired_into_the_capture_pipeline() -> None:
+    """T-2.6b: the gateway must actually hand a judge to the Pipeline.
+
+    fx_tech_support_en_001 fires REMOTE_ACCESS and crosses trigger_score, so
+    should_trigger() fires and the judge's evaluate() is called at least once.
+    """
+    judge = _RecordingJudge()
+    client = _app(judge_factory=lambda pack: judge)
+    with client.websocket_connect("/ws/capture?session=jw&leg=far&tenant=testco") as ws:
+        for _ in range(5):
+            ws.send_bytes(b"\x00\x00" * 640)
+    # WS close -> pipeline.end() flushes every turn through the judge path
+    assert judge.calls >= 1
+
+
+def test_default_judge_factory_is_none_when_pack_disables_it() -> None:
+    data = load_pack("config/policy/default.yaml").model_dump()
+    data["judge"]["enabled"] = False
+    disabled = PolicyPack.model_validate(data)
+    assert _default_judge_factory()(disabled) is None
 
 
 def _qs(params: dict) -> str:

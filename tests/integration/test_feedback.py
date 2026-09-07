@@ -13,6 +13,7 @@ def _client(fixture_id: str) -> TestClient:
     fx = load_fixture(fixture_id)
     app = create_app(
         provider_factory=lambda spec: NullASR(fixture_turns(fx), speed=400.0),
+        judge_factory=lambda pack: None,  # keep the suite offline regardless of local .env
         bus=InProcessBus(),
     )
     return TestClient(app)
