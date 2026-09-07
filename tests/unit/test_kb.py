@@ -1,9 +1,22 @@
-"""Fraud base-knowledge §2 — the static scam-pattern KB for the judge."""
+"""Fraud base-knowledge §2 — the scam-pattern KB for the judge (static + BM25)."""
 
 from __future__ import annotations
 
 from packages.risk.judge import DialogueWindow
-from packages.risk.kb import Excerpt, StaticKnowledgeBase, load_excerpts
+from packages.risk.kb import BM25KnowledgeBase, Excerpt, StaticKnowledgeBase, load_excerpts
+
+
+def _win(
+    caller: str, *, signals: tuple[str, ...] = (), protective: tuple[str, ...] = ()
+) -> DialogueWindow:
+    return DialogueWindow(
+        session_id="s",
+        turns=((("CALLER", caller, 9.0),)),
+        score=40.0,
+        active_signals=signals,
+        active_protective=protective,
+    )
+
 
 _W1 = DialogueWindow(
     session_id="s1",
@@ -68,3 +81,84 @@ def test_explicit_excerpts_preserve_within_label_order() -> None:
     ]
     got = [e.id for e in StaticKnowledgeBase(xs).examples_for(_W1)]
     assert got == ["f1", "b1", "f2", "f3"]
+
+
+# --- BM25 retrieval -------------------------------------------------------
+
+
+def test_bm25_retrieves_the_on_topic_family_first() -> None:
+    kb = BM25KnowledgeBase.load()
+    bank = kb.examples_for(
+        _win(
+            "This is your bank fraud team. Do not hang up. Read me the one-time code we texted you.",
+            signals=("AUTH_CLAIM", "CALLBACK_SUPPRESS", "VERIF_INVERT"),
+        )
+    )
+    assert bank[0].scam_family == "bank_impersonation"
+
+    tech = kb.examples_for(
+        _win(
+            "Microsoft security here. Your computer has a virus, install AnyDesk so I can fix it remotely.",
+            signals=("REMOTE_ACCESS",),
+        )
+    )
+    assert tech[0].scam_family == "tech_support"
+
+    fam = kb.examples_for(
+        _win(
+            "Grandma it's me, I crashed the car and I'm in jail, please don't tell mom, send bail."
+        )
+    )
+    assert fam[0].scam_family == "family_emergency"
+
+
+def test_bm25_is_deterministic() -> None:
+    kb = BM25KnowledgeBase.load()
+    w = _win("install anydesk remote access to your computer", signals=("REMOTE_ACCESS",))
+    assert [e.id for e in kb.examples_for(w)] == [e.id for e in kb.examples_for(w)]
+
+
+def test_bm25_keeps_a_benign_contrast_floor() -> None:
+    kb = BM25KnowledgeBase.load(k=6, min_benign=2)
+    got = kb.examples_for(
+        _win("read me the code, move the money to the safe account, buy gift cards now")
+    )
+    assert len(got) == 6
+    assert sum(1 for e in got if e.label == "benign") >= 2
+
+
+def test_bm25_empty_query_falls_back_to_static_order() -> None:
+    kb = BM25KnowledgeBase.load(k=8)
+    static = StaticKnowledgeBase.load(k=8)
+    got = kb.examples_for(_win(""))  # no caller words, no signals
+    assert [e.id for e in got] == [e.id for e in static.examples_for(_win(""))]
+
+
+def test_bm25_scores_a_relevant_doc_above_an_irrelevant_one() -> None:
+    xs = [
+        Excerpt(
+            "bank",
+            "read me the security code from your bank text",
+            "fraud",
+            "bank",
+            ("verification_inversion",),
+        ),
+        Excerpt(
+            "weather",
+            "it looks like rain this afternoon near the coast",
+            "benign",
+            "smalltalk",
+            ("none",),
+        ),
+        Excerpt(
+            "legit",
+            "call the number on your card to verify this is really us",
+            "benign",
+            "bank_desk",
+            ("offers_callback",),
+        ),
+    ]
+    kb = BM25KnowledgeBase(xs, k=3, min_benign=1)
+    got = [e.id for e in kb.examples_for(_win("give me the code from the bank text message"))]
+    assert got[0] == "bank"
+    assert got.index("bank") < got.index("weather")
