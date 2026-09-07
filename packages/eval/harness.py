@@ -18,6 +18,7 @@ from packages.contracts.transcript import AttributedTurn
 from packages.eval.fixtures import fixture_turns, load_fixture
 from packages.policy.pack import PolicyPack, load_pack
 from packages.risk.combos import evaluate_combos
+from packages.risk.derived import evaluate_derived
 from packages.risk.lexical import LexicalExtractor
 from packages.risk.lexicons import load_lexicons
 from packages.risk.hypotheses import load_hypotheses
@@ -169,6 +170,7 @@ def run_fixture(
 
         now = ft.t_end
         extras: list[Contribution] = list(evaluate_combos(window, now, pack))
+        extras += evaluate_derived(window, now, pack)
         judge = _judge_contribution(pack)
         if judge is not None:
             extras.append(judge)

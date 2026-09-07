@@ -22,6 +22,7 @@ from packages.contracts.transcript import AttributedTurn, Role
 from packages.media.role import RoleAttributor, StubRoleAttributor, role_for_hint
 from packages.policy.pack import PolicyPack, load_pack
 from packages.risk.combos import evaluate_combos
+from packages.risk.derived import evaluate_derived
 from packages.risk.hypotheses import load_hypotheses
 from packages.intervene.cases import CaseStore
 from packages.risk.judge import DialogueWindow, Judge, should_trigger
@@ -192,6 +193,7 @@ class Pipeline:
 
             now = turn.t_end
             extras = list(evaluate_combos(self._window, now, self._pack))
+            extras += evaluate_derived(self._window, now, self._pack)
 
             if self._judge is not None:
                 base, _ = score_window(self._window, now, self._pack, extras=tuple(extras))
