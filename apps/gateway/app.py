@@ -252,7 +252,7 @@ def create_app(
         await ws.accept()
         live = sessions.get(session)
         if live is None:
-            spec = StreamSpec(session_id=session, leg_id="mixed", sample_rate=_RATE)
+            spec = StreamSpec(session_id=session, leg_id=leg, sample_rate=_RATE)
             pipe = Pipeline(
                 make_provider(spec),
                 pack=the_pack,

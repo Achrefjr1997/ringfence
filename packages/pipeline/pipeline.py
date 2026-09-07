@@ -19,7 +19,7 @@ from packages.contracts.audio import Frame, SessionDescriptor
 from packages.contracts.events import EventBus
 from packages.contracts.risk import Contribution, Decision, State, Verdict
 from packages.contracts.transcript import AttributedTurn, Role
-from packages.media.role import RoleAttributor, StubRoleAttributor
+from packages.media.role import RoleAttributor, StubRoleAttributor, role_for_hint
 from packages.policy.pack import PolicyPack, load_pack
 from packages.risk.combos import evaluate_combos
 from packages.risk.hypotheses import load_hypotheses
@@ -98,6 +98,11 @@ class Pipeline:
         self._desc = desc
         await self._sm.admit(desc)
         self._attr = StubRoleAttributor(desc)
+        # A single-leg session (SDK / speakerphone) has one hinted role; use it
+        # when the stream's leg id doesn't match a descriptor leg.
+        self._sole_role: Role | None = (
+            role_for_hint(desc.legs[0].role_hint) if len(desc.legs) == 1 else None
+        )
 
         lang = desc.language or "en"
         weights = {sid: spec.weight for sid, spec in self._pack.signals.items()}
@@ -161,7 +166,10 @@ class Pipeline:
         assert self._lexical is not None and self._numeric is not None
         async for turn in self._stream.turns():
             self._turns_seen += 1
-            at = AttributedTurn(turn=turn, role=self._attr.role(turn.leg_id), role_confidence=1.0)
+            role = self._attr.role(turn.leg_id)
+            if role == "UNKNOWN" and self._sole_role is not None:
+                role = self._sole_role
+            at = AttributedTurn(turn=turn, role=role, role_confidence=1.0)
             self._transcript.append((at.role, turn.text, turn.t_end))
             hits = [*self._lexical.extract(at), *self._numeric.extract(at)]
             if self._sem_ex is not None:

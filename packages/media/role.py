@@ -21,6 +21,10 @@ _HINT_TO_ROLE: dict[RoleHint, Role] = {
 }
 
 
+def role_for_hint(hint: RoleHint) -> Role:
+    return _HINT_TO_ROLE.get(hint, "UNKNOWN")
+
+
 class RoleAttributor(Protocol):
     def role(self, leg_id: str) -> Role: ...
 
