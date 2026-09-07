@@ -520,10 +520,10 @@ Extractors are independent, versioned, and individually toggleable per tenant. E
 | `NumericExtractor` | Regex over OTP/PAN/IBAN/amount shapes with Luhn validation | < 1 ms |
 | `EntityExtractor` | ASR entity detection: org names, money, dates | provider-side |
 | `ProsodyExtractor` **[P2]** | Speaking-rate acceleration, interruption density, pause collapse — stress and pressure correlate with prosody and survive translation | ~10 ms |
-| `SemanticExtractor` | Sentence embeddings vs signal prototypes; catches paraphrase that lexicons miss | ~15 ms |
+| ~~`SemanticExtractor`~~ *(retired)* | Zero-shot NLI / embedding similarity vs signal prototypes. Prototyped and dropped — no threshold separated true from false positives (it entailed every signal from any bank sentence) | — |
 | `DialogueActExtractor` **[P2]** | Classifies turns as request / instruct / reassure / threaten — the *shape* of a scam script | ~20 ms |
 
-`SemanticExtractor` matters more than it looks: lexicons are brittle across dialects and adversaries paraphrase deliberately. Embedding similarity against prototype phrases per signal degrades gracefully where the lexicon has no entry, which is most of the time in low-resource dialects.
+Paraphrase and dialect drift are real: lexicons are brittle and adversaries reword deliberately. A zero-shot semantic extractor was built for this and **retired as miscalibrated** (see `docs/EXTERNAL_BENCHMARK.md`). That job now sits with the Tier-2 LLM judge (§7.4), which reasons over the raw transcript with retrieved scam-pattern context (BM25 over `corpus/kb/`), backed by periodic lexicon phrase-mining from real scam speech (`scripts/mine_lexicon.py`, `docs/LEXICON_MINING.md`).
 
 ### 6.3 Role attribution
 
@@ -709,7 +709,6 @@ The system must have a defined, tested behaviour for every dependency failure �
 | Failed | Behaviour | Protection retained |
 |---|---|---|
 | LLM judge | Rules-only scoring | ~85% of recall |
-| Semantic extractor | Lexical + numeric only | ~75% |
 | ASR primary | Failover provider; if none, signalling + campaign priors only | ~30% |
 | Campaign correlator | Per-call scoring only | ~80% |
 | Redis | New admissions rejected; in-flight calls unaffected | 100% for in-flight |
@@ -734,7 +733,7 @@ Every intervention carries a complete, replayable reason chain. This is not a ni
     {"source": "signal", "id": "AUTH_CLAIM", "value": 12.0, "role": "CALLER",
      "t": 14.2, "evidence_span": [14.2, 18.6], "extractor": "lexical@2.3"},
     {"source": "signal", "id": "CALLBACK_SUPPRESS", "value": 18.0, "role": "CALLER",
-     "t": 41.0, "evidence_span": [41.0, 44.8], "extractor": "semantic@1.1"},
+     "t": 41.0, "evidence_span": [41.0, 44.8], "extractor": "lexical@2.3"},
     {"source": "combo", "id": "COMBO_CRITICAL", "value": 35.0},
     {"source": "enrichment", "id": "shaken_missing", "value": 8.0},
     {"source": "judge", "id": "ring-judge-2026-08", "value": 9.5,

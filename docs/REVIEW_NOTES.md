@@ -56,8 +56,8 @@ par SMS") in `fx_real_bank_frauddesk_fr_001` (benign) — a spurious
 `VERIF_INVERT` worth 28.9. Removed; `"lisez-moi le code"` /
 `"lisez le code"` / `"donnez-moi le code"` cover the ask. frauddesk peak
 28.9 → 0.0. The general problem (a bag-of-phrases matcher can't tell
-asking from refusing) is unsolved — negation-aware matching or the
-semantic extractor would be the real fix.
+asking from refusing) is unsolved — negation-aware matching in Tier 1, or
+leaving it to the Tier-2 judge, would be the real fix.
 
 ---
 
