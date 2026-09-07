@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     retain_transcripts: bool = False
     asr_provider: Literal["assemblyai", "null"] = "null"
     log_level: str = "INFO"
+    session_secret: str | None = None  # HMAC key for auth tokens (T-7.1b); unset => ephemeral
 
 
 @lru_cache

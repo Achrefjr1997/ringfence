@@ -16,6 +16,7 @@ import json
 import logging
 import mimetypes
 import os
+import secrets
 import time
 from collections import Counter
 from collections.abc import AsyncIterator, Callable
@@ -25,15 +26,20 @@ from pathlib import Path
 from sse_starlette.sse import EventSourceResponse
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from apps.gateway.auth import authenticate, build_auth_routes
+from apps.gateway.orgs import build_org_routes
 from packages.asr.null import NullASR
 from packages.asr.provider import ASRProvider, StreamSpec
 from packages.contracts.audio import Frame, LegSpec, Mode, RoleHint, SessionDescriptor
 from packages.contracts.events import EventBus, InProcessBus
+from packages.contracts.settings import get_settings
+from packages.identity.models import User
+from packages.identity.store import IdentityStore, InMemoryIdentityStore
 from packages.intervene.cases import Case, CaseStore
 from packages.pipeline.pipeline import Pipeline
 from packages.policy.pack import PolicyPack, load_pack
@@ -95,6 +101,12 @@ def _default_judge_factory() -> JudgeFactory:
     return factory
 
 
+def _bearer(header: str | None) -> str | None:
+    if header and header[:7].lower() == "bearer ":
+        return header[7:].strip() or None
+    return None
+
+
 @dataclass
 class GatewayMetrics:
     admitted: int = 0
@@ -137,6 +149,16 @@ def _serialise_case(case: Case) -> dict[str, object]:
     }
 
 
+def _serialise_verdict(case: Case) -> dict[str, object]:
+    """Guardian view — the full decision chain, no transcript text."""
+    data = _serialise_case(case)
+    data.pop("transcript", None)
+    return data
+
+
+_CASE_ROLES = frozenset({"admin", "operator", "guardian"})
+
+
 def _default_provider_factory() -> ProviderFactory:
     def factory(spec: StreamSpec) -> ASRProvider:
         import os
@@ -165,34 +187,81 @@ def create_app(
     pack: PolicyPack | None = None,
     bus: EventBus | None = None,
     case_store: CaseStore | None = None,
+    identity: IdentityStore | None = None,
+    session_secret: str | None = None,
     tenants: TenantRegistry | None = None,
     quota_per_tenant: int | None = None,
     capacity: int = 500,
     dev_consent: bool = True,
+    dev_mode: bool = False,
 ) -> Starlette:
     the_pack = pack or load_pack("config/policy/default.yaml")
     the_bus = bus or InProcessBus()
     the_cases = case_store or CaseStore()
     the_tenants = tenants or load_tenants()
+    the_identity: IdentityStore = identity or InMemoryIdentityStore()
+    the_secret = session_secret or get_settings().session_secret
+    if not the_secret:
+        the_secret = secrets.token_urlsafe(32)
+        log.warning("RF_SESSION_SECRET unset - auth tokens will not survive a restart")
     make_provider = provider_factory or _default_provider_factory()
     the_judge = (judge_factory or _default_judge_factory())(the_pack)
     metrics = GatewayMetrics()
     sessions: dict[str, _Live] = {}
     sm = SessionManager(bus=the_bus)
 
-    def admit(tenant: str, consent: str | None) -> str | None:
-        if not tenant.strip():
-            return "TENANT"
-        cfg = the_tenants.get(tenant)
-        if (cfg.consent_required or not dev_consent) and not consent:
-            return "CONSENT"
+    def admit(
+        *, api_key: str | None, tenant_hint: str, consent: str | None
+    ) -> tuple[str | None, str | None]:
+        """Return ``(tenant, reject_reason)`` — exactly one is ``None``.
+
+        §3.6 order, with AUTH first: outside ``dev_mode`` the tenant comes
+        from a valid API key, never a query param.
+        """
+        if dev_mode:
+            tenant = tenant_hint
+            if not tenant.strip():
+                return None, "TENANT"
+            cfg = the_tenants.get(tenant)
+            if (cfg.consent_required or not dev_consent) and not consent:
+                return None, "CONSENT"
+        else:
+            if not api_key:
+                return None, "AUTH"
+            key = the_identity.resolve_api_key(api_key)
+            if key is None:
+                return None, "AUTH"
+            org = the_identity.get_org(key.org_id)
+            if org is None:
+                return None, "AUTH"
+            key.last_used_at = time.time()
+            tenant = org.tenant
+            cfg = the_tenants.get(tenant)
+
         quota = quota_per_tenant if quota_per_tenant is not None else cfg.quota
         active_for_tenant = sum(1 for s in sessions.values() if s.tenant == tenant)
         if active_for_tenant >= quota:
-            return "QUOTA"
+            return None, "QUOTA"
         if len(sessions) >= capacity:
-            return "CAPACITY"
-        return None
+            return None, "CAPACITY"
+        return tenant, None
+
+    def read_tenant(request: Request) -> tuple[str | None, str | None]:
+        """Resolve the tenant scope for a read endpoint (``/events``).
+
+        In ``dev_mode`` an optional ``?tenant=`` narrows the subscription;
+        otherwise a valid API key is required.
+        """
+        if dev_mode:
+            return request.query_params.get("tenant"), None
+        api_key = _bearer(request.headers.get("authorization")) or request.query_params.get("key")
+        key = the_identity.resolve_api_key(api_key) if api_key else None
+        if key is None:
+            return None, "AUTH"
+        org = the_identity.get_org(key.org_id)
+        if org is None:
+            return None, "AUTH"
+        return org.tenant, None
 
     async def health(_: Request) -> JSONResponse:
         return JSONResponse(
@@ -231,9 +300,11 @@ def create_app(
             }
         )
 
-    async def events(request: Request) -> EventSourceResponse:
+    async def events(request: Request) -> Response:
         session_id = request.path_params["session_id"]
-        tenant = request.query_params.get("tenant")
+        tenant, reason = read_tenant(request)
+        if reason is not None:
+            return JSONResponse({"error": reason.lower()}, status_code=401)
         pattern = tenant_pattern(tenant) if tenant else "rf.*"
 
         async def stream() -> AsyncIterator[dict[str, object]]:
@@ -252,7 +323,25 @@ def create_app(
 
         return EventSourceResponse(stream())
 
-    async def list_cases(_: Request) -> JSONResponse:
+    def case_access(request: Request) -> tuple[User | None, JSONResponse | None]:
+        """``(user, error)``.  In ``dev_mode`` returns ``(None, None)`` — no
+        auth, every case visible (the current local/demo behaviour)."""
+        if dev_mode:
+            return None, None
+        user = authenticate(request, the_identity, the_secret)
+        if user is None:
+            return None, JSONResponse({"error": "unauthenticated"}, status_code=401)
+        if user.role not in _CASE_ROLES:
+            return None, JSONResponse({"error": "forbidden"}, status_code=403)
+        return user, None
+
+    async def list_cases(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        cases = the_cases.list()
+        if user is not None:
+            cases = [c for c in cases if c.tenant == user.org_id]
         return JSONResponse(
             [
                 {
@@ -262,18 +351,32 @@ def create_app(
                     "peak_score": round(c.peak_score, 1),
                     "feedback": c.feedback,
                 }
-                for c in the_cases.list()
+                for c in cases
             ]
         )
 
     async def get_case(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
         case = the_cases.get(request.path_params["session_id"])
-        if case is None:
+        if case is None or (user is not None and case.tenant != user.org_id):
             return JSONResponse({"error": "no such case"}, status_code=404)
+        if user is not None and user.role == "guardian":
+            return JSONResponse(_serialise_verdict(case))
         return JSONResponse(_serialise_case(case))
 
     async def post_feedback(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        if user is not None and user.role == "guardian":
+            return JSONResponse({"error": "forbidden"}, status_code=403)
         session_id = request.path_params["session_id"]
+        if user is not None:
+            existing = the_cases.get(session_id)
+            if existing is None or existing.tenant != user.org_id:
+                return JSONResponse({"error": "no such case"}, status_code=404)
         body = await request.json()
         try:
             case = the_cases.set_feedback(
@@ -288,16 +391,19 @@ def create_app(
     async def capture(ws: WebSocket) -> None:
         session = ws.query_params.get("session", "")
         leg = ws.query_params.get("leg", "far")
-        tenant = ws.query_params.get("tenant", "")
         consent = ws.query_params.get("consent")
+        api_key = _bearer(ws.headers.get("authorization")) or ws.query_params.get("key")
 
-        reason = admit(tenant, consent)
+        tenant, reason = admit(
+            api_key=api_key, tenant_hint=ws.query_params.get("tenant", ""), consent=consent
+        )
         if reason is not None:
             metrics.rejected[reason] += 1
             await ws.accept()
             await ws.send_json({"type": "rejected", "reason": reason})
             await ws.close(code=1008)
             return
+        assert tenant is not None
 
         await ws.accept()
         live = sessions.get(session)
@@ -362,6 +468,8 @@ def create_app(
         Route("/cases", list_cases),
         Route("/cases/{session_id}", get_case),
         Route("/cases/{session_id}/feedback", post_feedback, methods=["POST"]),
+        *build_auth_routes(the_identity, the_secret),
+        *build_org_routes(the_identity, the_secret),
         WebSocketRoute("/ws/capture", capture),
     ]
     console = Path(__file__).resolve().parents[1] / "console"
@@ -372,4 +480,7 @@ def create_app(
     app.state.metrics = metrics
     app.state.bus = the_bus
     app.state.sessions = sessions
+    app.state.identity = the_identity
+    app.state.session_secret = the_secret
+    app.state.cases = the_cases
     return app

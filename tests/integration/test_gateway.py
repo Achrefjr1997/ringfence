@@ -38,6 +38,9 @@ class _RecordingJudge:
 def _app(**kw: object) -> TestClient:
     bus = kw.pop("bus", None) or InProcessBus()
     kw.setdefault("judge_factory", lambda pack: None)  # tests opt in to the judge explicitly
+    kw.setdefault(
+        "dev_mode", True
+    )  # keep ?tenant= admission working; key auth is test_key_admission
     app = create_app(
         provider_factory=lambda spec: NullASR(fixture_turns(FX), speed=200.0),
         bus=bus,
