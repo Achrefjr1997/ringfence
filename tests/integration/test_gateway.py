@@ -64,7 +64,11 @@ def test_console_static_files_are_served() -> None:
     assert wk.status_code == 200
     assert "registerProcessor" in wk.text
     assert "text/javascript" in wk.headers["content-type"]
-    assert "echoCancellation: false" in client.get("/capture.js").text
+    cap = client.get("/capture.js").text
+    assert "echoCancellation: false" in cap
+    # T-3.4b: the single speakerphone stream must open as the caller leg, or
+    # every captured word is CALLEE-attributed and scores 0 (invariant #1).
+    assert "leg=far" in cap and "leg=mixed" not in cap
     assert "mountConsole" in client.get("/app.js").text
 
 

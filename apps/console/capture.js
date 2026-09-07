@@ -13,7 +13,11 @@ let ws = null;
 export async function startCapture(sessionId, { onLevel, onStatus, onDecision } = {}) {
   const status = (s) => onStatus && onStatus(s);
 
-  ws = new WebSocket(`ws://${GW}/ws/capture?session=${encodeURIComponent(sessionId)}&leg=mixed&tenant=console`);
+  // Open as the caller leg. A speakerphone held to the mic is one mixed
+  // stream; the gateway maps this leg to RoleHint.CALLER so its signals
+  // score (CALLEE speech scores 0 by invariant #1, which otherwise pins the
+  // gauge at CALM). Genuine two-party separation is T-6.3, still unbuilt.
+  ws = new WebSocket(`ws://${GW}/ws/capture?session=${encodeURIComponent(sessionId)}&leg=far&tenant=console`);
   ws.binaryType = "arraybuffer";
   ws.onopen = () => status("connected");
   ws.onclose = () => status("closed");
