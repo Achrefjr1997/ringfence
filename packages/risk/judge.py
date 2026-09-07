@@ -25,9 +25,11 @@ from pydantic import BaseModel, Field, ValidationError
 from packages.contracts.risk import State, Verdict
 from packages.contracts.transcript import Role
 from packages.policy.pack import PolicyPack
+from packages.risk.kb import Excerpt, KnowledgeBase
 
 VerdictLabel = Literal["benign", "unclear", "suspicious", "fraud"]
 _TIMEOUT_S = 0.8
+_MAX_PROMPT_EXAMPLES = 12
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,10 +102,12 @@ class BoundedJudge:
         *,
         model: str,
         timeout_s: float = _TIMEOUT_S,
+        kb: KnowledgeBase | None = None,
     ) -> None:
         self._caller = caller
         self._model = model
         self._timeout_s = timeout_s
+        self._kb = kb
         self._calls: dict[str, int] = {}
         self.last_prompt_hash: str | None = None
 
@@ -117,7 +121,8 @@ class BoundedJudge:
             return _miss("session budget exhausted", 0, self._model)
         self._calls[window.session_id] = self._calls.get(window.session_id, 0) + 1
 
-        system, user = _build_prompt(window, cap)
+        examples = self._kb.examples_for(window) if self._kb is not None else ()
+        system, user = _build_prompt(window, cap, examples)
         self.last_prompt_hash = hashlib.sha256(f"{system}\n{user}".encode()).hexdigest()[:16]
 
         started = time.perf_counter()
@@ -151,7 +156,27 @@ class BoundedJudge:
         )
 
 
-def _build_prompt(window: DialogueWindow, cap: int) -> tuple[str, str]:
+def _render_examples(examples: Sequence[Excerpt]) -> str:
+    if not examples:
+        return ""
+    blocks = [
+        f"{e.label.upper()} — {e.scam_family} — {', '.join(e.tactics)}\n  {e.text}"
+        for e in examples[:_MAX_PROMPT_EXAMPLES]
+    ]
+    return (
+        "\n\nReference patterns (illustrative, not this call):\n\n"
+        + "\n\n".join(blocks)
+        + "\n\nCalibrate against these: authority and urgency alone are not fraud — a genuine "
+        "bank, courier or support line has both. What marks fraud is asking the CALLEE to read "
+        "back a one-time code or PIN, move money by gift card / wire / crypto / cash courier, "
+        "install remote-access software, keep the call secret, or not call back on an official "
+        "number."
+    )
+
+
+def _build_prompt(
+    window: DialogueWindow, cap: int, examples: Sequence[Excerpt] = ()
+) -> tuple[str, str]:
     system = (
         "You are a fraud analyst reviewing a live phone call. Decide whether the CALLER "
         "is running a scam on the CALLEE. Respond with JSON only: "
@@ -162,6 +187,7 @@ def _build_prompt(window: DialogueWindow, cap: int) -> tuple[str, str]:
         'there genuinely are none), "rationale": <= 25 words}. '
         "The rules engine already scored this call; you only nudge that score. "
         "A real bank or delivery company calling is benign even if it sounds urgent."
+        + _render_examples(examples)
     )
     lines = [f"[{role}] {text}" for role, text, _ in window.turns]
     user = (
