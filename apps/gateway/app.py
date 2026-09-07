@@ -26,12 +26,13 @@ from pathlib import Path
 from sse_starlette.sse import EventSourceResponse
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from apps.gateway.auth import build_auth_routes
+from apps.gateway.orgs import build_org_routes
 from packages.asr.null import NullASR
 from packages.asr.provider import ASRProvider, StreamSpec
 from packages.contracts.audio import Frame, LegSpec, Mode, RoleHint, SessionDescriptor
@@ -97,6 +98,12 @@ def _default_judge_factory() -> JudgeFactory:
         return BoundedJudge(caller, model=pack.judge.model, timeout_s=timeout_s)
 
     return factory
+
+
+def _bearer(header: str | None) -> str | None:
+    if header and header[:7].lower() == "bearer ":
+        return header[7:].strip() or None
+    return None
 
 
 @dataclass
@@ -175,6 +182,7 @@ def create_app(
     quota_per_tenant: int | None = None,
     capacity: int = 500,
     dev_consent: bool = True,
+    dev_mode: bool = False,
 ) -> Starlette:
     the_pack = pack or load_pack("config/policy/default.yaml")
     the_bus = bus or InProcessBus()
@@ -191,19 +199,58 @@ def create_app(
     sessions: dict[str, _Live] = {}
     sm = SessionManager(bus=the_bus)
 
-    def admit(tenant: str, consent: str | None) -> str | None:
-        if not tenant.strip():
-            return "TENANT"
-        cfg = the_tenants.get(tenant)
-        if (cfg.consent_required or not dev_consent) and not consent:
-            return "CONSENT"
+    def admit(
+        *, api_key: str | None, tenant_hint: str, consent: str | None
+    ) -> tuple[str | None, str | None]:
+        """Return ``(tenant, reject_reason)`` — exactly one is ``None``.
+
+        §3.6 order, with AUTH first: outside ``dev_mode`` the tenant comes
+        from a valid API key, never a query param.
+        """
+        if dev_mode:
+            tenant = tenant_hint
+            if not tenant.strip():
+                return None, "TENANT"
+            cfg = the_tenants.get(tenant)
+            if (cfg.consent_required or not dev_consent) and not consent:
+                return None, "CONSENT"
+        else:
+            if not api_key:
+                return None, "AUTH"
+            key = the_identity.resolve_api_key(api_key)
+            if key is None:
+                return None, "AUTH"
+            org = the_identity.get_org(key.org_id)
+            if org is None:
+                return None, "AUTH"
+            key.last_used_at = time.time()
+            tenant = org.tenant
+            cfg = the_tenants.get(tenant)
+
         quota = quota_per_tenant if quota_per_tenant is not None else cfg.quota
         active_for_tenant = sum(1 for s in sessions.values() if s.tenant == tenant)
         if active_for_tenant >= quota:
-            return "QUOTA"
+            return None, "QUOTA"
         if len(sessions) >= capacity:
-            return "CAPACITY"
-        return None
+            return None, "CAPACITY"
+        return tenant, None
+
+    def read_tenant(request: Request) -> tuple[str | None, str | None]:
+        """Resolve the tenant scope for a read endpoint (``/events``).
+
+        In ``dev_mode`` an optional ``?tenant=`` narrows the subscription;
+        otherwise a valid API key is required.
+        """
+        if dev_mode:
+            return request.query_params.get("tenant"), None
+        api_key = _bearer(request.headers.get("authorization")) or request.query_params.get("key")
+        key = the_identity.resolve_api_key(api_key) if api_key else None
+        if key is None:
+            return None, "AUTH"
+        org = the_identity.get_org(key.org_id)
+        if org is None:
+            return None, "AUTH"
+        return org.tenant, None
 
     async def health(_: Request) -> JSONResponse:
         return JSONResponse(
@@ -242,9 +289,11 @@ def create_app(
             }
         )
 
-    async def events(request: Request) -> EventSourceResponse:
+    async def events(request: Request) -> Response:
         session_id = request.path_params["session_id"]
-        tenant = request.query_params.get("tenant")
+        tenant, reason = read_tenant(request)
+        if reason is not None:
+            return JSONResponse({"error": reason.lower()}, status_code=401)
         pattern = tenant_pattern(tenant) if tenant else "rf.*"
 
         async def stream() -> AsyncIterator[dict[str, object]]:
@@ -299,16 +348,19 @@ def create_app(
     async def capture(ws: WebSocket) -> None:
         session = ws.query_params.get("session", "")
         leg = ws.query_params.get("leg", "far")
-        tenant = ws.query_params.get("tenant", "")
         consent = ws.query_params.get("consent")
+        api_key = _bearer(ws.headers.get("authorization")) or ws.query_params.get("key")
 
-        reason = admit(tenant, consent)
+        tenant, reason = admit(
+            api_key=api_key, tenant_hint=ws.query_params.get("tenant", ""), consent=consent
+        )
         if reason is not None:
             metrics.rejected[reason] += 1
             await ws.accept()
             await ws.send_json({"type": "rejected", "reason": reason})
             await ws.close(code=1008)
             return
+        assert tenant is not None
 
         await ws.accept()
         live = sessions.get(session)
@@ -374,6 +426,7 @@ def create_app(
         Route("/cases/{session_id}", get_case),
         Route("/cases/{session_id}/feedback", post_feedback, methods=["POST"]),
         *build_auth_routes(the_identity, the_secret),
+        *build_org_routes(the_identity, the_secret),
         WebSocketRoute("/ws/capture", capture),
     ]
     console = Path(__file__).resolve().parents[1] / "console"

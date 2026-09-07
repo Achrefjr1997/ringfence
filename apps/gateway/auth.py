@@ -39,7 +39,7 @@ def _token_for(user: User, secret: str) -> str:
     return issue_token(user_id=user.id, org_id=user.org_id, role=user.role, secret=secret)
 
 
-async def _json_body(request: Request) -> dict[str, object]:
+async def read_json_body(request: Request) -> dict[str, object]:
     try:
         data = await request.json()
     except (ValueError, TypeError):
@@ -63,7 +63,7 @@ def authenticate(request: Request, store: IdentityStore, secret: str) -> User | 
 
 def build_auth_routes(store: IdentityStore, secret: str) -> list[Route]:
     async def signup(request: Request) -> JSONResponse:
-        body = await _json_body(request)
+        body = await read_json_body(request)
         try:
             _, admin = store.create_org_with_admin(
                 org_name=str(body.get("org_name", "")),
@@ -77,7 +77,7 @@ def build_auth_routes(store: IdentityStore, secret: str) -> list[Route]:
         return JSONResponse(_account_body(admin, _token_for(admin, secret)), status_code=201)
 
     async def login(request: Request) -> JSONResponse:
-        body = await _json_body(request)
+        body = await read_json_body(request)
         email = str(body.get("email", ""))
         password = str(body.get("password", ""))
         user = store.get_user_by_email(email) if email else None
