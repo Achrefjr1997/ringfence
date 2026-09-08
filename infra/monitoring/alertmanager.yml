@@ -1,0 +1,32 @@
+# Alertmanager config for the production stack (T-7.5).
+#
+# One receiver: a generic webhook the operator points at whatever pages a
+# human (a phone push relay, Slack, PagerDuty, ...). The compose entrypoint
+# rewrites the placeholder URL below from $RF_ALERT_WEBHOOK_URL at boot
+# (it is a valid but unroutable .invalid URL so amtool can still lint this
+# file as committed). Critical alerts repeat every 30m, the rest every 4h.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: default-webhook
+  group_by: ["alertname", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers:
+        - severity = "critical"
+      receiver: default-webhook
+      repeat_interval: 30m
+    - matchers:
+        - severity = "info"
+      receiver: default-webhook
+      repeat_interval: 24h
+
+receivers:
+  - name: default-webhook
+    webhook_configs:
+      - url: "https://alerts.placeholder.invalid/replace-me"
+        send_resolved: true
