@@ -12,6 +12,10 @@
 }
 
 {$RF_DOMAIN} {
+	# empty in production (real Let's Encrypt cert); set to "tls internal"
+	# for a localhost run so Caddy issues its own cert (browser warning only)
+	{$RF_TLS}
+
 	encode zstd gzip
 
 	header {

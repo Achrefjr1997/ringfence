@@ -12,6 +12,7 @@ COMPOSE = ROOT / "infra" / "compose" / "docker-compose.prod.yml"
 CADDYFILE = ROOT / "infra" / "compose" / "Caddyfile"
 RELEASE = ROOT / ".github" / "workflows" / "release.yml"
 REMOTE_SH = ROOT / "infra" / "deploy" / "remote.sh"
+LOCAL_OVERLAY = ROOT / "infra" / "compose" / "docker-compose.local-prod.yml"
 
 
 @pytest.fixture(scope="module")
@@ -91,3 +92,23 @@ def test_remote_deploy_script_shape() -> None:
     # migrate runs before the stack comes up
     assert text.index("packages.db.migrate") < text.index("compose -f docker-compose.prod.yml")
     assert "sops --decrypt" in text and "shred -u age.key" in text
+
+
+def test_gateway_waits_for_a_healthy_postgres(prod: dict) -> None:
+    pg = prod["services"]["postgres"]
+    assert "pg_isready" in pg["healthcheck"]["test"][1]
+    assert prod["services"]["gateway"]["depends_on"]["postgres"]["condition"] == "service_healthy"
+
+
+def test_local_prod_overlay_builds_the_image_and_exposes_the_dashboards() -> None:
+    doc = yaml.safe_load(LOCAL_OVERLAY.read_text(encoding="utf-8"))
+    svc = doc["services"]
+    assert "context" in svc["gateway"]["build"]  # built here, not pulled
+    assert svc["gateway"]["ports"] == ["8000:8000"]  # direct access for debugging
+    assert svc["prometheus"]["ports"] == ["9090:9090"]
+    assert svc["alertmanager"]["ports"] == ["9093:9093"]
+    assert svc["migrate"]["depends_on"]["postgres"]["condition"] == "service_healthy"
+
+
+def test_caddyfile_can_switch_to_an_internal_cert_for_localhost() -> None:
+    assert "{$RF_TLS}" in CADDYFILE.read_text(encoding="utf-8")
