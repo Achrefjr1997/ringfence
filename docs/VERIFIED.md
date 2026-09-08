@@ -13,7 +13,17 @@ phone voice)" meter moved while the other person was talking.
 
 | Date | Browser | Device | Far-end voice present? | Notes |
 |------|---------|--------|------------------------|-------|
-| _pending_ | | | | |
+| _pending_ | | | | real phone-next-to-mic acceptance still needed |
+
+**Automated coverage (T-3.5, 2026-09-08):** `capture.js` now opens the
+speakerphone stream as `leg=mixed`; `Pipeline` runs the
+`AcousticRoleClassifier` over the PCM and attributes each turn's role
+instead of pinning the call to one role.
+`tests/integration/test_role_mixed_pipeline.py` drives synthetic mixed
+audio through a live `Pipeline` and asserts per-turn role accuracy ≥ 0.85,
+that the victim is never labelled the caller, that a scam fixture still
+escalates to ALERT/INTERVENE and a benign one stays CALM. The row above is
+the remaining hardware acceptance.
 
 ## T-4.3 — Console live view: screenshot at INTERVENE
 

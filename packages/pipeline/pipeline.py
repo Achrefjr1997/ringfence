@@ -15,10 +15,11 @@ import asyncio
 from dataclasses import dataclass, field
 
 from packages.asr.provider import ASRProvider, ASRStream, StreamSpec
-from packages.contracts.audio import Frame, SessionDescriptor
+from packages.contracts.audio import Frame, RoleHint, SessionDescriptor
 from packages.contracts.events import EventBus
 from packages.contracts.risk import Contribution, Decision, State, Verdict
 from packages.contracts.transcript import AttributedTurn, Role
+from packages.media.acoustic_role import AcousticRoleClassifier
 from packages.media.role import RoleAttributor, StubRoleAttributor, role_for_hint
 from packages.policy.pack import PolicyPack, load_pack
 from packages.risk.combos import evaluate_combos
@@ -74,6 +75,9 @@ class Pipeline:
         self._desc: SessionDescriptor | None = None
         self._stream: ASRStream | None = None
         self._attr: RoleAttributor | None = None
+        # set for a single mixed stream (speakerphone): separates the far
+        # (telephone-band) party from the near (room-mic) one acoustically
+        self._acoustic: AcousticRoleClassifier | None = None
         self._consume: asyncio.Task[None] | None = None
 
         self._window = EvidenceWindow()
@@ -94,11 +98,16 @@ class Pipeline:
         self._desc = desc
         await self._sm.admit(desc)
         self._attr = StubRoleAttributor(desc)
-        # A single-leg session (SDK / speakerphone) has one hinted role; use it
-        # when the stream's leg id doesn't match a descriptor leg.
-        self._sole_role: Role | None = (
-            role_for_hint(desc.legs[0].role_hint) if len(desc.legs) == 1 else None
-        )
+        sole_hint = desc.legs[0].role_hint if len(desc.legs) == 1 else None
+        sr = desc.legs[0].sample_rate if desc.legs else 16_000
+        if sole_hint is RoleHint.MIXED:
+            # one mixed stream: attribute each turn acoustically, no fixed role
+            self._acoustic = AcousticRoleClassifier(rate=sr)
+            self._sole_role: Role | None = None
+        else:
+            # a hinted single leg (SDK) keeps its role when the stream's leg
+            # id doesn't match a descriptor leg
+            self._sole_role = role_for_hint(sole_hint) if sole_hint is not None else None
 
         lang = desc.language or "en"
         weights = {sid: spec.weight for sid, spec in self._pack.signals.items()}
@@ -110,7 +119,6 @@ class Pipeline:
         self._numeric = NumericExtractor(weights)
         self._machine = RiskStateMachine(self._pack, session_id=desc.session_id)
 
-        sr = desc.legs[0].sample_rate if desc.legs else 16_000
         stream_spec = StreamSpec(
             session_id=desc.session_id, leg_id="mixed", sample_rate=sr, language=desc.language
         )
@@ -119,6 +127,8 @@ class Pipeline:
 
     async def feed(self, frame: Frame) -> None:
         await self._sm.on_frame(frame)
+        if self._acoustic is not None:
+            self._acoustic.observe(frame.pcm)
         if self._stream is not None:
             await self._stream.feed(frame.pcm)
 
@@ -154,10 +164,19 @@ class Pipeline:
         assert self._lexical is not None and self._numeric is not None
         async for turn in self._stream.turns():
             self._turns_seen += 1
-            role = self._attr.role(turn.leg_id)
-            if role == "UNKNOWN" and self._sole_role is not None:
-                role = self._sole_role
-            at = AttributedTurn(turn=turn, role=role, role_confidence=1.0)
+            if self._acoustic is not None:
+                # classify the middle of the turn -- boundary word-timing is
+                # fuzzy and the codec cue is cleanest away from the edges
+                a = turn.t_start + 0.15
+                b = max(a + 0.1, turn.t_end - 0.15)
+                guess = self._acoustic.classify(a, b)
+                role, confidence = guess.role, guess.confidence
+            else:
+                role = self._attr.role(turn.leg_id)
+                if role == "UNKNOWN" and self._sole_role is not None:
+                    role = self._sole_role
+                confidence = 1.0
+            at = AttributedTurn(turn=turn, role=role, role_confidence=confidence)
             self._transcript.append((at.role, turn.text, turn.t_end))
             hits = [*self._lexical.extract(at), *self._numeric.extract(at)]
             for hit in hits:

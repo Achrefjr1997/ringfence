@@ -531,7 +531,10 @@ def create_app(
                 case_store=the_cases,
                 judge=the_judge,
             )
-            role = RoleHint.CALLER if leg == "far" else RoleHint.CALLEE
+            # far/near => a dedicated leg with a known role (two-socket SDK);
+            # anything else (mixed, the speakerphone default) => attribute
+            # each turn acoustically
+            role = {"far": RoleHint.CALLER, "near": RoleHint.CALLEE}.get(leg, RoleHint.MIXED)
             await pipe.start(
                 SessionDescriptor(
                     session_id=session,
