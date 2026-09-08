@@ -1,0 +1,83 @@
+name: release
+
+# Build the gateway image on every push to main, then deploy it:
+# staging automatically, production behind a manual approval gate.
+#
+# The deploy jobs are inert until the repo variables DEPLOY_STAGING_ENABLED
+# / DEPLOY_PRODUCTION_ENABLED are set to "true" and the matching SSH / age
+# secrets exist -- so this workflow is green before any server is provisioned.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: meta
+        run: |
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ringfence-gateway" >> "$GITHUB_OUTPUT"
+          echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/gateway/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+            ${{ steps.meta.outputs.image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-staging:
+    needs: build-push
+    runs-on: ubuntu-latest
+    if: ${{ vars.DEPLOY_STAGING_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: deploy
+        env:
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          AGE_KEY: ${{ secrets.AGE_KEY }}
+          IMAGE_TAG: ${{ needs.build-push.outputs.tag }}
+        run: ./infra/deploy/remote.sh staging
+
+  deploy-production:
+    needs: [build-push, deploy-staging]
+    runs-on: ubuntu-latest
+    if: ${{ vars.DEPLOY_PRODUCTION_ENABLED == 'true' }}
+    environment: production # requires a reviewer to approve in the GitHub UI
+    steps:
+      - uses: actions/checkout@v4
+      - name: deploy
+        env:
+          SSH_HOST: ${{ secrets.PRODUCTION_SSH_HOST }}
+          SSH_USER: ${{ secrets.PRODUCTION_SSH_USER }}
+          SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+          AGE_KEY: ${{ secrets.AGE_KEY }}
+          IMAGE_TAG: ${{ needs.build-push.outputs.tag }}
+        run: ./infra/deploy/remote.sh production
