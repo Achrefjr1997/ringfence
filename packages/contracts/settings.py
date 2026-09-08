@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     retain_transcripts: bool = False
     asr_provider: Literal["assemblyai", "null"] = "null"
     log_level: str = "INFO"
+    log_format: Literal["json", "text"] = "json"  # structured logs by default (T-7.5)
     session_secret: str | None = None  # HMAC key for auth tokens (T-7.1b); unset => ephemeral
     # postgres DSN for the identity store (T-7.2a); unset => in-memory
     database_url: str | None = None

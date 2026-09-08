@@ -25,8 +25,10 @@ from pathlib import Path
 
 from sse_starlette.sse import EventSourceResponse
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
@@ -41,6 +43,7 @@ from packages.contracts.settings import get_settings
 from packages.identity.models import User
 from packages.identity.store import IdentityStore, InMemoryIdentityStore
 from packages.intervene.cases import Case, CaseStore, InMemoryCaseStore
+from packages.obs.metrics import MetricsSnapshot, prometheus_text
 from packages.pipeline.pipeline import Pipeline
 from packages.policy.pack import PolicyPack, load_pack
 from packages.policy.tenants import TenantRegistry, load_tenants, tenant_pattern
@@ -50,6 +53,40 @@ from packages.session.manager import SessionManager
 log = logging.getLogger("ringfence.gateway")
 
 _RATE = 16_000  # §3.6 rejection reasons, in check order: TENANT, CONSENT, QUOTA, CAPACITY
+
+
+class _AccessLog(BaseHTTPMiddleware):
+    """One structured line per HTTP request.  Health and metrics scrapes
+    log at DEBUG so a 15 s Prometheus poll does not drown the stream."""
+
+    _QUIET = frozenset({"/health", "/metrics"})
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        start = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            log.exception(
+                "request failed",
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "dur_ms": round((time.perf_counter() - start) * 1000, 1),
+                },
+            )
+            raise
+        log.log(
+            logging.DEBUG if request.url.path in self._QUIET else logging.INFO,
+            "request",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+                "dur_ms": round((time.perf_counter() - start) * 1000, 1),
+            },
+        )
+        return response
+
 
 # Windows' registry maps .js -> text/plain, which browsers refuse to run as a
 # module or an AudioWorklet. Force the correct type before StaticFiles reads it.
@@ -242,6 +279,9 @@ def create_app(
     the_judge = (judge_factory or _default_judge_factory())(the_pack)
     metrics = GatewayMetrics()
     sessions: dict[str, _Live] = {}
+    # provider -> breaker state, for /metrics. Empty until an ASRRouter is
+    # wired into the capture path (it currently uses providers directly).
+    asr_breakers: dict[str, str] = {}
     sm = SessionManager(bus=the_bus)
 
     def admit(
@@ -306,6 +346,20 @@ def create_app(
                 "metrics": metrics.as_dict(),
             }
         )
+
+    async def metrics_endpoint(_: Request) -> PlainTextResponse:
+        by_tenant: Counter[str] = Counter(s.tenant for s in sessions.values())
+        body = prometheus_text(
+            MetricsSnapshot(
+                active=len(sessions),
+                capacity=capacity,
+                admitted=metrics.admitted,
+                rejected=dict(metrics.rejected),
+                active_by_tenant=dict(by_tenant),
+                asr_breakers=dict(asr_breakers),
+            )
+        )
+        return PlainTextResponse(body, media_type="text/plain; version=0.0.4")
 
     async def replay_fixture(request: Request) -> JSONResponse:
         """Dev helper for the console demo: play a fixture's transcript onto
@@ -497,6 +551,7 @@ def create_app(
 
     routes: list[Route | WebSocketRoute | Mount] = [
         Route("/health", health),
+        Route("/metrics", metrics_endpoint),
         Route("/events/{session_id}", events),
         Route("/replay/{fixture_id}", replay_fixture, methods=["POST"]),
         Route("/cases", list_cases),
@@ -510,7 +565,7 @@ def create_app(
     if console.is_dir():
         routes.append(Mount("/", app=StaticFiles(directory=console, html=True)))
 
-    app = Starlette(routes=routes, on_shutdown=on_shutdown)
+    app = Starlette(routes=routes, on_shutdown=on_shutdown, middleware=[Middleware(_AccessLog)])
     app.state.metrics = metrics
     app.state.bus = the_bus
     app.state.sessions = sessions
