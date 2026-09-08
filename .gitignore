@@ -2,6 +2,9 @@
 __pycache__/
 *.pyc
 .env
+.env.prod
+.env.staging
+*.decrypted
 reports/
 corpus/audio/
 .coverage

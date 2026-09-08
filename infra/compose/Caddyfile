@@ -1,0 +1,31 @@
+# Reverse proxy + automatic TLS for the gateway (T-7.2c).
+#
+# RF_DOMAIN and ACME_EMAIL come from the environment (compose passes them
+# through).  Caddy provisions and renews a Let's Encrypt certificate on its
+# own; nothing else to configure for HTTPS.
+
+{
+	email {$ACME_EMAIL}
+	# Staging CA while you are still pointing DNS around; flip to prod by
+	# unsetting RF_ACME_CA.  Rate limits on the prod CA are unforgiving.
+	{$RF_ACME_CA}
+}
+
+{$RF_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	# WebSocket (/ws/capture) and SSE (/events/*) both pass through a plain
+	# reverse_proxy in Caddy v2 -- no special casing needed.  Disable buffering
+	# so SSE frames are not held back.
+	reverse_proxy gateway:8000 {
+		flush_interval -1
+	}
+}
