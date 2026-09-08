@@ -29,6 +29,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # the default 'docker' driver can't export a gha cache; this gives a
+      # docker-container builder that can
+      - uses: docker/setup-buildx-action@v3
+
       - id: meta
         run: |
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ringfence-gateway" >> "$GITHUB_OUTPUT"
