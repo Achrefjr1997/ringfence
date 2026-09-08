@@ -9,7 +9,7 @@ as a first-class feature, not an afterthought.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Protocol
 
 from packages.contracts.risk import Decision, State
 from packages.contracts.transcript import Role
@@ -39,7 +39,29 @@ class Case:
         return max((d.score for d in self.decisions), default=0.0)
 
 
-class CaseStore:
+class CaseStore(Protocol):
+    """What the pipeline and gateway depend on.  ``InMemoryCaseStore`` is
+    the default; ``packages.intervene.pg_cases.PgCaseStore`` is the
+    Postgres implementation (T-7.2b) -- nothing above this interface
+    changes between them."""
+
+    def record(
+        self,
+        session_id: str,
+        decision: Decision,
+        transcript: list[tuple[Role, str, float]],
+        *,
+        tenant: str = "",
+    ) -> Case: ...
+
+    def get(self, session_id: str) -> Case | None: ...
+
+    def list(self) -> list[Case]: ...
+
+    def set_feedback(self, session_id: str, label: str, note: str = "") -> Case: ...
+
+
+class InMemoryCaseStore:
     def __init__(self) -> None:
         self._cases: dict[str, Case] = {}
 

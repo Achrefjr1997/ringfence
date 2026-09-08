@@ -4,7 +4,7 @@ Implements the *same* synchronous interface as
 :class:`~packages.identity.store.InMemoryIdentityStore` -- ``store.py`` and
 the SaaS roadmap both promise nothing above the interface changes when
 persistence lands, and it doesn't.  Underneath, ``asyncpg`` runs on a
-private :class:`~packages.identity._loop.LoopThread`; every public method
+private :class:`~packages.db.loop.LoopThread`; every public method
 is a thin blocking wrapper around one coroutine.
 
 Validation is unchanged too: rows are built back into the Pydantic models
@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Callable, Coroutine
 from typing import Any, TypeVar
 
-from packages.identity._loop import LoopThread
+from packages.db.loop import LoopThread
 from packages.identity.keys import hash_key, mint_api_key
 from packages.identity.migrate import apply_schema
 from packages.identity.models import ApiKey, Org, Role, User

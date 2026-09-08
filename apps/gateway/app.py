@@ -40,7 +40,7 @@ from packages.contracts.events import EventBus, InProcessBus
 from packages.contracts.settings import get_settings
 from packages.identity.models import User
 from packages.identity.store import IdentityStore, InMemoryIdentityStore
-from packages.intervene.cases import Case, CaseStore
+from packages.intervene.cases import Case, CaseStore, InMemoryCaseStore
 from packages.pipeline.pipeline import Pipeline
 from packages.policy.pack import PolicyPack, load_pack
 from packages.policy.tenants import TenantRegistry, load_tenants, tenant_pattern
@@ -203,15 +203,27 @@ def create_app(
 ) -> Starlette:
     the_pack = pack or load_pack("config/policy/default.yaml")
     the_bus = bus or InProcessBus()
-    the_cases = case_store or CaseStore()
     the_tenants = tenants or load_tenants()
     on_shutdown: list[Callable[[], object]] = []
+    _dsn = get_settings().database_url
+
+    if case_store is not None:
+        the_cases: CaseStore = case_store
+    elif _dsn:
+        from packages.intervene.pg_cases import PgCaseStore
+
+        pg_cases = PgCaseStore(_dsn)
+        the_cases = pg_cases
+        on_shutdown.append(pg_cases.close)
+    else:
+        the_cases = InMemoryCaseStore()
+
     if identity is not None:
         the_identity: IdentityStore = identity
-    elif get_settings().database_url:
+    elif _dsn:
         from packages.identity.pg_store import PgIdentityStore
 
-        pg = PgIdentityStore(get_settings().database_url or "")
+        pg = PgIdentityStore(_dsn)
         the_identity = pg
         on_shutdown.append(pg.close)
     else:
