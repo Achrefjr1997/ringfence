@@ -13,6 +13,7 @@ tenants:
     consent_required: true
     languages: [en, fr]
     guardian_webhook_url: https://acme.example/ringfence/guardian
+    guardian_webhook_secret_env: RF_GUARDIAN_SECRET_ACME
 
   aircarrier:            # a no-egress carrier
     quota: 500
