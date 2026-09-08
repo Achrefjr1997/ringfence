@@ -66,9 +66,10 @@ def test_console_static_files_are_served() -> None:
     assert "text/javascript" in wk.headers["content-type"]
     cap = client.get("/capture.js").text
     assert "echoCancellation: false" in cap
-    # T-3.4b: the single speakerphone stream must open as the caller leg, or
-    # every captured word is CALLEE-attributed and scores 0 (invariant #1).
-    assert "leg=far" in cap and "leg=mixed" not in cap
+    # T-3.5: the single speakerphone stream opens as leg=mixed so the pipeline
+    # runs the AcousticRoleClassifier and attributes each turn's role, rather
+    # than pinning the whole call to one role.
+    assert "leg=mixed" in cap and "leg=far" not in cap
     assert "mountConsole" in client.get("/app.js").text
 
 
