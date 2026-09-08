@@ -230,8 +230,14 @@ def create_app(
         the_identity = InMemoryIdentityStore()
     the_secret = session_secret or get_settings().session_secret
     if not the_secret:
+        if not dev_mode:
+            raise RuntimeError(
+                "RF_SESSION_SECRET must be set outside dev_mode - it signs every auth, "
+                "verification, reset and invite token; an ephemeral one silently "
+                "invalidates them all on restart"
+            )
         the_secret = secrets.token_urlsafe(32)
-        log.warning("RF_SESSION_SECRET unset - auth tokens will not survive a restart")
+        log.warning("RF_SESSION_SECRET unset - dev_mode: using an ephemeral signing key")
     make_provider = provider_factory or _default_provider_factory()
     the_judge = (judge_factory or _default_judge_factory())(the_pack)
     metrics = GatewayMetrics()

@@ -126,3 +126,29 @@ def test_a_second_store_sees_the_first_ones_writes(store: PgIdentityStore) -> No
         assert other.resolve_api_key(plaintext) is not None
     finally:
         other.close()
+
+
+# -- mutations (T-7.1d) -------------------------------------------
+
+
+def test_set_password_set_verified_and_list_users(store: PgIdentityStore) -> None:
+    from packages.identity.passwords import hash_password, verify_password
+
+    org, admin = _org(store)
+    op = store.add_user(
+        org_id=org.id, email="op@acme.co", password="pw-old-123456", role="operator"
+    )
+    assert op.verified is False
+
+    store.set_password(op.id, hash_password("pw-new-654321"))
+    fetched = store.get_user(op.id)
+    assert fetched is not None and verify_password("pw-new-654321", fetched.password_hash)
+
+    assert store.set_verified(op.id).verified is True
+
+    assert [u.id for u in store.list_users(org.id)] == [admin.id, op.id]
+
+    with pytest.raises(IdentityError):
+        store.set_password("nope", "x")
+    with pytest.raises(IdentityError):
+        store.set_verified("nope")

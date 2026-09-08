@@ -34,7 +34,13 @@ class IdentityStore(Protocol):
 
     def get_user_by_email(self, email: str) -> User | None: ...
 
+    def list_users(self, org_id: str) -> list[User]: ...
+
     def get_org(self, org_id: str) -> Org | None: ...
+
+    def set_password(self, user_id: str, password_hash: str) -> User: ...
+
+    def set_verified(self, user_id: str) -> User: ...
 
     def issue_api_key(self, *, org_id: str, name: str) -> tuple[ApiKey, str]: ...
 
@@ -94,8 +100,28 @@ class InMemoryIdentityStore:
         uid = self._user_id_by_email.get(email.strip().lower())
         return self._users.get(uid) if uid is not None else None
 
+    def list_users(self, org_id: str) -> list[User]:
+        return sorted(
+            (u for u in self._users.values() if u.org_id == org_id),
+            key=lambda u: u.created_at,
+        )
+
     def get_org(self, org_id: str) -> Org | None:
         return self._orgs.get(org_id)
+
+    def set_password(self, user_id: str, password_hash: str) -> User:
+        user = self._users.get(user_id)
+        if user is None:
+            raise IdentityError(f"no such user {user_id}")
+        user.password_hash = password_hash
+        return user
+
+    def set_verified(self, user_id: str) -> User:
+        user = self._users.get(user_id)
+        if user is None:
+            raise IdentityError(f"no such user {user_id}")
+        user.verified = True
+        return user
 
     # -- api keys ---------------------------------------------------
 
