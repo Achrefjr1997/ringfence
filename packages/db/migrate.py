@@ -11,11 +11,16 @@ from __future__ import annotations
 
 import sys
 
+from packages.billing.pg_meter import schema_sql as _billing_schema
 from packages.identity.migrate import schema_sql as _identity_schema
 from packages.intervene.pg_cases import schema_sql as _cases_schema
 
-# order matters only in that identity has no dependency on cases
-_SCHEMAS = (("identity", _identity_schema), ("cases", _cases_schema))
+# each schema is self-contained (no cross-table FKs between them)
+_SCHEMAS = (
+    ("identity", _identity_schema),
+    ("cases", _cases_schema),
+    ("billing", _billing_schema),
+)
 
 
 async def _run(dsn: str) -> None:

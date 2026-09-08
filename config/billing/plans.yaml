@@ -1,0 +1,62 @@
+# Ringfence billing plans (T-7.3).
+#
+# Pricing model: per protected line, with a monthly call-minute allowance
+# and metered overage. Anchored to the consumer scam-protection market
+# ($4-10 / user / month: Robokiller $4.99, Hiya $3.99-9.99, Truecaller
+# ~$4.99) and undercutting on volume, which is right for a B2B call desk.
+#
+# Cost basis (VERIFY against live contracts before launch -- see
+# docs/PRICING.md): streaming ASR ~$0.005/min (AssemblyAI Universal-2
+# $0.15/hr .. Universal-3.5 Pro Realtime $0.45/hr), Tier-2 judge calls
+# amortised ~$0.002/min, infra <$0.0001/min. All-in marginal ~$0.01/min,
+# so overage rates below are ~1.5-2x cost.
+#
+# base_cents           : fixed monthly charge for the plan
+# included_lines       : protected lines the base covers
+# minutes_per_line     : monthly call-minute allowance per included line
+# overage_cents_per_min: charge per call-minute above the pooled allowance
+# hard_cap             : true  -> reject admission once the allowance is spent
+#                        false -> keep serving, accrue overage
+
+default: pilot
+
+plans:
+  pilot:
+    name: "Pilot"
+    base_cents: 0
+    included_lines: 3
+    minutes_per_line: 200
+    overage_cents_per_min: 0
+    hard_cap: true
+
+  starter:
+    name: "Starter"
+    base_cents: 4900
+    included_lines: 10
+    minutes_per_line: 300
+    overage_cents_per_min: 2.0
+    hard_cap: false
+
+  growth:
+    name: "Growth"
+    base_cents: 24900
+    included_lines: 60
+    minutes_per_line: 400
+    overage_cents_per_min: 1.5
+    hard_cap: false
+
+  scale:
+    name: "Scale"
+    base_cents: 99900
+    included_lines: 300
+    minutes_per_line: 500
+    overage_cents_per_min: 1.0
+    hard_cap: false
+
+  enterprise:
+    name: "Enterprise"
+    base_cents: 0          # negotiated; billed outside the metered path
+    included_lines: 0
+    minutes_per_line: 0
+    overage_cents_per_min: 0
+    hard_cap: false
