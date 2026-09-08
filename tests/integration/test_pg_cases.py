@@ -108,3 +108,43 @@ def test_a_second_store_sees_the_first_ones_writes(store: PgCaseStore) -> None:
         assert got is not None and got.tenant == "org-1"
     finally:
         other.close()
+
+
+def test_feedback_note_and_transcript_are_encrypted_at_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("cryptography")
+    from cryptography.fernet import Fernet
+
+    from packages.contracts import settings as settings_mod
+
+    monkeypatch.setenv("RF_DATA_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("RF_RETAIN_TRANSCRIPTS", "true")
+    settings_mod.get_settings.cache_clear()
+
+    s = PgCaseStore(_DSN or "")
+    s._run(_truncate(s))
+    try:
+        s.record("s1", _decision("ALERT"), _TX)
+        s.set_feedback("s1", "fraud", "victim already read out the gift card code")
+
+        # round-trips in clear through the store
+        got = s.get("s1")
+        assert got is not None
+        assert got.feedback_note == "victim already read out the gift card code"
+        assert [t[0] for t in got.transcript] == ["CALLER", "CALLEE"]
+
+        # ...but the raw columns are ciphertext, not the words
+        async def _raw() -> tuple[str, str]:
+            async with s._pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT feedback_note, transcript FROM cases WHERE session_id = 's1'"
+                )
+            return row["feedback_note"], row["transcript"]
+
+        note_raw, tx_raw = s._run(_raw())
+        assert note_raw.startswith("enc:") and "gift card" not in note_raw
+        assert tx_raw.startswith("enc:") and "hi this is your bank" not in tx_raw
+    finally:
+        s.close()
+        settings_mod.get_settings.cache_clear()

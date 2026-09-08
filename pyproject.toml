@@ -14,7 +14,10 @@ dependencies = [
 dev = ["pytest==8.*", "pytest-asyncio==0.24.*", "pytest-cov==5.*",
        "ruff==0.7.*", "mypy==1.13.*"]
 judge = ["ollama>=0.4"]
-db = ["asyncpg==0.30.*"]  # Postgres-backed stores (T-7.2a); in-memory otherwise
+db = [  # Postgres-backed stores (T-7.2a) + at-rest column encryption (T-7.4)
+  "asyncpg==0.30.*",
+  "cryptography>=43,<46",
+]
 
 [tool.setuptools.packages.find]
 include = ["packages*", "apps*"]
