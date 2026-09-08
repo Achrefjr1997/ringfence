@@ -1,0 +1,72 @@
+# Production / staging topology (T-7.2c).
+#
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+#
+# Standalone (not an overlay on docker-compose.yml) so there is exactly one
+# file to read for what runs in production.  Differences from the local file:
+#
+#   * the gateway image is pulled by tag, never built here
+#   * only Caddy faces the internet; the gateway is on the internal network
+#   * RF_SESSION_SECRET, RF_DATABASE_URL, RF_DOMAIN, ACME_EMAIL and
+#     POSTGRES_PASSWORD are required -- compose fails fast if the env-file
+#     omits them (the "?err" form)
+#   * every service restarts unless explicitly stopped; state is on volumes
+#
+# Secrets live in .env.prod, SOPS-encrypted at rest -- see docs/DEPLOY.md.
+# Run `python -m packages.db.migrate` once before the first boot.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [gateway]
+    ports: ["80:80", "443:443"]
+    environment:
+      RF_DOMAIN: ${RF_DOMAIN:?set RF_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
+      RF_ACME_CA: ${RF_ACME_CA:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  gateway:
+    image: ghcr.io/achrefjr1997/ringfence-gateway:${RF_IMAGE_TAG:?set RF_IMAGE_TAG}
+    restart: unless-stopped
+    depends_on: [nats, redis, postgres]
+    expose: ["8000"]
+    environment:
+      RF_MODE: production
+      RF_DRY_RUN: ${RF_DRY_RUN:-true}
+      RF_DEV_MODE: "0"
+      RF_LOG_FORMAT: json
+      RF_SESSION_SECRET: ${RF_SESSION_SECRET:?set RF_SESSION_SECRET}
+      RF_DATABASE_URL: ${RF_DATABASE_URL:?set RF_DATABASE_URL}
+      RF_NATS: nats://nats:4222
+      RF_REDIS: redis://redis:6379
+      RF_ASR_PROVIDER: ${RF_ASR_PROVIDER:-null}
+      ASSEMBLYAI_API_KEY: ${ASSEMBLYAI_API_KEY:-}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+
+  nats:
+    image: nats:2-alpine
+    command: ["-js"]
+    restart: unless-stopped
+
+  redis:
+    image: valkey/valkey:8-alpine
+    restart: unless-stopped
+
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-ringfence}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+volumes:
+  caddy_data:
+  caddy_config:
+  pg_data:

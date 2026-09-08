@@ -204,10 +204,37 @@ class PgIdentityStore:
     def get_org(self, org_id: str) -> Org | None:
         return self._run(self._get_one(f"SELECT {_ORG_COLS} FROM orgs WHERE id = $1", org_id, _org))
 
+    def list_users(self, org_id: str) -> list[User]:
+        return self._run(self._list_users(org_id))
+
+    async def _list_users(self, org_id: str) -> list[User]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"SELECT {_USER_COLS} FROM users WHERE org_id = $1 ORDER BY created_at", org_id
+            )
+        return [_user(r) for r in rows]
+
     async def _get_one(self, sql: str, arg: str, build: Callable[[Any], _M]) -> _M | None:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(sql, arg)
         return None if row is None else build(row)
+
+    def set_password(self, user_id: str, password_hash: str) -> User:
+        return self._run(
+            self._update_user("UPDATE users SET password_hash = $2", user_id, password_hash)
+        )
+
+    def set_verified(self, user_id: str) -> User:
+        return self._run(self._update_user("UPDATE users SET verified = TRUE", user_id))
+
+    async def _update_user(self, set_clause: str, user_id: str, *args: object) -> User:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"{set_clause} WHERE id = $1 RETURNING {_USER_COLS}", user_id, *args
+            )
+        if row is None:
+            raise IdentityError(f"no such user {user_id}")
+        return _user(row)
 
     # -- api keys ---------------------------------------------------
 

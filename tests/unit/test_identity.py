@@ -127,3 +127,32 @@ def test_cannot_revoke_another_orgs_key() -> None:
     key, _ = s.issue_api_key(org_id=org_a.id, name="k")
     with pytest.raises(IdentityError):
         s.revoke_api_key(org_id=org_b.id, key_id=key.id)
+
+
+# -- mutations (T-7.1d) ---------------------------------------------
+
+
+def test_set_password_and_set_verified() -> None:
+    s, org, admin = _store_with_org()
+    op = s.add_user(org_id=org.id, email="op@acme.co", password="pw-old-123456", role="operator")
+    assert op.verified is False
+
+    s.set_password(op.id, hash_password("pw-new-654321"))
+    assert verify_password("pw-new-654321", s.get_user(op.id).password_hash)  # type: ignore[union-attr]
+
+    got = s.set_verified(op.id)
+    assert got.verified is True and s.get_user(op.id).verified is True  # type: ignore[union-attr]
+
+    for call in (lambda: s.set_password("nope", "x"), lambda: s.set_verified("nope")):
+        with pytest.raises(IdentityError):
+            call()
+
+
+def test_list_users_is_scoped_to_the_org_and_ordered() -> None:
+    s, org_a, admin_a = _store_with_org()
+    org_b, admin_b = s.create_org_with_admin(
+        org_name="Beta", email="admin@beta.co", password="pw-56789012"
+    )
+    op = s.add_user(org_id=org_a.id, email="op@acme.co", password="pw-34567890", role="operator")
+    assert [u.id for u in s.list_users(org_a.id)] == [admin_a.id, op.id]
+    assert [u.id for u in s.list_users(org_b.id)] == [admin_b.id]
