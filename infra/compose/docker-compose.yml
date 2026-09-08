@@ -18,6 +18,7 @@ services:
     image: timescale/timescaledb:latest-pg16
     environment:
       POSTGRES_PASSWORD: dev
+      POSTGRES_DB: ringfence
     ports: ["5432:5432"]
 
   minio:
@@ -37,6 +38,9 @@ services:
       RF_DRY_RUN: "true" # the gateway is also the actioner in the MVP
       RF_NATS: nats://nats:4222
       RF_REDIS: redis://redis:6379
+      # unset => in-memory identity store. Opt in with:
+      #   RF_DATABASE_URL=postgres://postgres:dev@postgres:5432/ringfence
+      RF_DATABASE_URL: ${RF_DATABASE_URL:-}
       RF_ASR_PROVIDER: ${RF_ASR_PROVIDER:-null} # null | assemblyai
       ASSEMBLYAI_API_KEY: ${ASSEMBLYAI_API_KEY:-}
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}

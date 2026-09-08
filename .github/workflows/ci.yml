@@ -7,6 +7,18 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: dev
+          POSTGRES_DB: ringfence
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      RF_TEST_DATABASE_URL: postgres://postgres:dev@localhost:5432/ringfence
     steps:
       - uses: actions/checkout@v4
 
@@ -18,7 +30,7 @@ jobs:
       - name: install
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends libsndfile1
-          python -m pip install -e ".[dev]"
+          python -m pip install -e ".[dev,db]"
 
       - name: lint
         run: |
@@ -29,7 +41,10 @@ jobs:
         run: mypy packages apps
 
       - name: tests
-        run: pytest -q -m "not needs_key and not needs_ollama and not needs_dataset"
+        run: pytest -q -m "not needs_key and not needs_ollama and not needs_dataset and not needs_pg"
+
+      - name: postgres-backed tests
+        run: pytest -q -m needs_pg
 
       # A broken invariant is a distinct, obvious build failure — not buried in
       # the test run above.

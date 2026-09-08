@@ -13,7 +13,7 @@ COPY config ./config
 COPY corpus/fixtures ./corpus/fixtures
 COPY corpus/kb ./corpus/kb
 
-RUN pip install --no-cache-dir -e ".[judge]"
+RUN pip install --no-cache-dir -e ".[judge,db]"
 
 EXPOSE 8000
 ENV RF_DRY_RUN=true
