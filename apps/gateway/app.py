@@ -33,11 +33,15 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from apps.gateway.auth import authenticate, build_auth_routes
+from apps.gateway.auth import authenticate, build_auth_routes, read_json_body
 from apps.gateway.orgs import build_org_routes
 from apps.gateway.ratelimit import RateLimiter, RateLimitMiddleware
 from packages.asr.null import NullASR
 from packages.asr.provider import ASRProvider, StreamSpec
+from packages.billing.meter import BillingStore, InMemoryBillingStore
+from packages.billing.plans import get_plans
+from packages.billing.provider import BillingProvider, NullBilling
+from packages.billing.service import BillingService
 from packages.contracts.audio import Frame, LegSpec, Mode, RoleHint, SessionDescriptor
 from packages.contracts.events import EventBus, InProcessBus
 from packages.contracts.settings import get_settings
@@ -53,7 +57,7 @@ from packages.session.manager import SessionManager
 
 log = logging.getLogger("ringfence.gateway")
 
-_RATE = 16_000  # §3.6 rejection reasons, in check order: TENANT, CONSENT, QUOTA, CAPACITY
+_RATE = 16_000  # rejection reasons, in check order: AUTH, TENANT, CONSENT, BILLING, QUOTA, CAPACITY
 
 
 class _AccessLog(BaseHTTPMiddleware):
@@ -164,6 +168,7 @@ class GatewayMetrics:
 class _Live:
     pipeline: Pipeline
     tenant: str
+    started_at: float = 0.0
     legs: set[str] = field(default_factory=set)
 
 
@@ -232,6 +237,8 @@ def create_app(
     bus: EventBus | None = None,
     case_store: CaseStore | None = None,
     identity: IdentityStore | None = None,
+    billing_store: BillingStore | None = None,
+    billing_provider: BillingProvider | None = None,
     session_secret: str | None = None,
     tenants: TenantRegistry | None = None,
     quota_per_tenant: int | None = None,
@@ -266,6 +273,20 @@ def create_app(
         on_shutdown.append(pg.close)
     else:
         the_identity = InMemoryIdentityStore()
+
+    if billing_store is not None:
+        the_billing_store: BillingStore = billing_store
+    elif _dsn:
+        from packages.billing.pg_meter import PgBillingStore
+
+        pg_billing = PgBillingStore(_dsn)
+        the_billing_store = pg_billing
+        on_shutdown.append(pg_billing.close)
+    else:
+        the_billing_store = InMemoryBillingStore()
+    billing = BillingService(get_plans(), the_billing_store)
+    the_billing_provider = billing_provider or NullBilling()
+
     the_secret = session_secret or get_settings().session_secret
     if not the_secret:
         if not dev_mode:
@@ -312,6 +333,10 @@ def create_app(
             key.last_used_at = time.time()
             tenant = org.tenant
             cfg = the_tenants.get(tenant)
+            # a hard-capped plan (free/pilot) stops admitting once its
+            # monthly minute allowance is spent; metered plans just accrue
+            if billing.over_hard_cap(tenant):
+                return None, "BILLING"
 
         quota = quota_per_tenant if quota_per_tenant is not None else cfg.quota
         active_for_tenant = sum(1 for s in sessions.values() if s.tenant == tenant)
@@ -517,7 +542,7 @@ def create_app(
                     language="en",
                 )
             )
-            live = _Live(pipeline=pipe, tenant=tenant)
+            live = _Live(pipeline=pipe, tenant=tenant, started_at=time.time())
             sessions[session] = live
             metrics.admitted += 1
         live.legs.add(leg)
@@ -549,6 +574,39 @@ def create_app(
                 sessions.pop(session, None)
                 with contextlib.suppress(Exception):
                     await live.pipeline.end(session)
+                closed_at = time.time()
+                minutes = max(0.0, (closed_at - live.started_at) / 60.0)
+                the_billing_store.record(live.tenant, "call_minutes", minutes, ts=closed_at)
+                the_billing_store.record(live.tenant, "calls", 1, ts=closed_at)
+                with contextlib.suppress(Exception):
+                    the_billing_provider.report_usage(
+                        live.tenant, "call_minutes", minutes, ts=closed_at
+                    )
+
+    async def usage(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        tenant = user.org_id if user is not None else request.query_params.get("tenant", "")
+        if not tenant:
+            return JSONResponse({"error": "tenant unresolved"}, status_code=400)
+        body = billing.snapshot(tenant).as_dict()
+        body["portal_url"] = the_billing_provider.portal_url(tenant)
+        return JSONResponse(body)
+
+    async def set_plan(request: Request) -> JSONResponse:
+        user = authenticate(request, the_identity, the_secret)
+        if user is None:
+            return JSONResponse({"error": "unauthenticated"}, status_code=401)
+        if user.role != "admin":
+            return JSONResponse({"error": "admin role required"}, status_code=403)
+        plan_id = str((await read_json_body(request)).get("plan", ""))
+        if plan_id not in get_plans().ids():
+            return JSONResponse(
+                {"error": f"unknown plan; choose from {get_plans().ids()}"}, status_code=400
+            )
+        the_billing_store.set_plan(user.org_id, plan_id)
+        return JSONResponse(billing.snapshot(user.org_id).as_dict())
 
     routes: list[Route | WebSocketRoute | Mount] = [
         Route("/health", health),
@@ -558,6 +616,8 @@ def create_app(
         Route("/cases", list_cases),
         Route("/cases/{session_id}", get_case),
         Route("/cases/{session_id}/feedback", post_feedback, methods=["POST"]),
+        Route("/usage", usage),
+        Route("/orgs/plan", set_plan, methods=["POST"]),
         *build_auth_routes(the_identity, the_secret),
         *build_org_routes(the_identity, the_secret),
         WebSocketRoute("/ws/capture", capture),
