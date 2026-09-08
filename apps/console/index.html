@@ -3,143 +3,97 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>RingFence — console</title>
+    <title>RingFence</title>
     <style>
       :root {
-        color-scheme: light dark;
-        --calm: #3a7; --watch: #b93; --alert: #d73; --intervene: #d33;
+        color-scheme: dark;
+        --bg: #0b0d10; --panel: #12151a; --raised: #191d24; --border: #262b34;
+        --t0: #e8eaed; --t1: #a8aeb8; --t2: #6b7280;
+        --accent: #3dd4e0;
+        --calm: #3aae7c; --watch: #d6a93b; --alert: #de7a3a; --intervene: #e0463c;
+        --caller: #d98a55; --callee: #5aa0d9;
+        --mono: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
       }
-      body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 1.25rem; max-width: 52rem; }
-      h1 { font-size: 1.05rem; margin: 0 0 .9rem; }
-      .row { display: flex; gap: .5rem; align-items: center; margin-bottom: .9rem; flex-wrap: wrap; }
-      input { padding: .38rem .5rem; font: inherit; }
-      button { padding: .38rem .85rem; font: inherit; cursor: pointer; }
-      .status { font-variant: small-caps; opacity: .8; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--t0);
+        font: 14px/1.5 system-ui, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+      a { color: var(--accent); text-decoration: none; } a:hover { color: #6fe3ec; }
+      button { font: inherit; cursor: pointer; }
+      input, select { font: inherit; }
+      .mono { font-family: var(--mono); }
+      .lbl { font-family: var(--mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--t2); }
+      .btn { font-size: 13px; font-weight: 600; padding: 9px 16px; border-radius: 8px; border: none;
+        background: var(--accent); color: #06222a; }
+      .btn.ghost { background: transparent; border: 1px solid #31374a; color: var(--t0); }
+      .btn.danger { background: #e0463c14; border: 1px solid #e0463c55; color: var(--intervene); }
+      .btn:disabled { opacity: .5; cursor: default; }
+      .field { display: block; width: 100%; font-size: 14px; padding: 10px 12px; border-radius: 9px;
+        border: 1px solid #2a303b; background: #0e1116; color: var(--t0); }
+      .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+      .row { display: flex; gap: 10px; align-items: center; }
+      .grid { display: grid; gap: 14px; }
+      table { border-collapse: collapse; width: 100%; font-size: 13px; }
+      th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+      th { color: var(--t2); font-weight: 600; font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+      tr:hover td { background: #101318; }
+      .pill { font-family: var(--mono); font-size: 10px; padding: 2px 7px; border-radius: 999px; }
+      .st-CALM { color: var(--calm); background: #3aae7c1f; }
+      .st-WATCH { color: var(--watch); background: #d6a93b1f; }
+      .st-ALERT { color: var(--alert); background: #de7a3a1f; }
+      .st-INTERVENE { color: var(--intervene); background: #e0463c1f; }
+      .err { color: var(--intervene); font-size: 13px; }
+      .ok { color: var(--calm); font-size: 13px; }
 
-      .grid { display: grid; grid-template-columns: 84px 1fr; gap: 1rem; align-items: stretch; }
-      /* pressure gauge */
-      .gauge-wrap { display: flex; flex-direction: column; align-items: center; gap: .4rem; }
-      .gauge { position: relative; width: 46px; flex: 1; min-height: 220px; background: #8882; border-radius: 6px; overflow: hidden; }
-      .gauge > span { position: absolute; bottom: 0; left: 0; right: 0; height: 0; background: var(--calm); transition: height .2s ease, background .2s; }
+      #app { display: flex; min-height: 100vh; }
+      nav { width: 216px; flex-shrink: 0; background: #0d1014; border-right: 1px solid #1d2129; padding: 18px 14px;
+        display: flex; flex-direction: column; }
+      nav .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; font-weight: 700; font-size: 15px; }
+      nav a { display: block; padding: 8px 12px; border-radius: 7px; font-size: 13px; color: var(--t1); }
+      nav a.on { background: var(--raised); color: var(--t0); }
+      nav .who { margin-top: auto; font-size: 12px; color: var(--t2); padding: 10px 8px 0; }
+      main { flex: 1; padding: 28px 32px; max-width: 1100px; }
+      h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+      .sub { color: var(--t2); font-size: 13px; margin-bottom: 22px; }
+      .authwrap { display: flex; align-items: center; justify-content: center; min-height: 100vh; width: 100%; }
+      .authbox { width: 380px; }
+
+      /* live view (drives app.js output) */
+      .live-grid { display: grid; grid-template-columns: 90px 1fr; gap: 18px; }
+      .gauge { width: 46px; background: var(--raised); border-radius: 6px; position: relative; overflow: hidden; min-height: 260px; }
+      .gauge > span { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: var(--calm); transition: height .2s ease, background .2s; }
       .gauge > span[data-state="WATCH"] { background: var(--watch); }
       .gauge > span[data-state="ALERT"] { background: var(--alert); }
       .gauge > span[data-state="INTERVENE"] { background: var(--intervene); }
-      .glabel { font: 600 12px ui-monospace, monospace; }
-      .glabel[data-state="INTERVENE"] { color: var(--intervene); }
+      .glabel { font-family: var(--mono); font-weight: 700; font-size: 13px; margin-top: 8px; }
       .glabel[data-state="ALERT"] { color: var(--alert); }
-
-      /* transcript */
-      .panel { border: 1px solid #8883; border-radius: 6px; }
-      #transcript { height: 230px; overflow: auto; padding: .5rem .6rem; font-family: ui-monospace, monospace; font-size: .82rem; }
-      .turn { padding: .2rem 0; border-bottom: 1px solid #8881; }
-      .turn .role { display: inline-block; width: 62px; opacity: .6; font-size: .7rem; }
-      .turn-CALLER .txt { color: #c62; }
-      .turn-CALLEE .txt { color: #38a; }
-      .turn-UNKNOWN .txt { opacity: .65; }
-      .chip { display: inline-block; margin-left: .35rem; padding: 0 .35rem; border-radius: 3px; background: #d7333322; color: var(--alert); font-size: .68rem; }
-
-      /* timeline */
-      #timeline { margin-top: 1rem; }
+      .glabel[data-state="INTERVENE"] { color: var(--intervene); }
+      .glabel[data-state="WATCH"] { color: var(--watch); }
+      #transcript { height: 300px; overflow: auto; padding: 10px 12px; font-family: var(--mono); font-size: 12px;
+        background: #0e1116; border: 1px solid var(--border); border-radius: 8px; }
+      .turn { padding: 4px 0; border-bottom: 1px solid #1a1e25; }
+      .turn .role { display: inline-block; width: 66px; color: var(--t2); font-size: 10px; }
+      .turn-CALLER .txt { color: var(--caller); }
+      .turn-CALLEE .txt { color: var(--callee); }
+      .turn-UNKNOWN .txt { color: var(--t2); }
+      .chip { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px;
+        background: #e0463c22; color: var(--alert); font-size: 10px; }
+      #timeline { margin-top: 12px; }
       .tl { width: 100%; height: auto; }
-      .tl .axis { stroke: #8886; stroke-width: 1; }
-      .tl .tick { fill: #8889; font-size: 9px; text-anchor: middle; }
+      .tl .axis { stroke: #8886; } .tl .tick { fill: #8889; font-size: 9px; text-anchor: middle; }
       .tl .sig { stroke: var(--alert); stroke-width: 1.5; opacity: .55; }
       .tl .siglab { fill: var(--alert); font-size: 8px; }
       .tl .tr { stroke-width: 2; }
-      .tl .tr-WATCH { stroke: var(--watch); } .tl .tr-ALERT { stroke: var(--alert); }
-      .tl .tr-INTERVENE { stroke: var(--intervene); }
-      .tl .trlab { font: 700 9px ui-monospace, monospace; text-anchor: middle; }
-      .tl .trlab.tr-WATCH { fill: var(--watch); } .tl .trlab.tr-ALERT { fill: var(--alert); }
-      .tl .trlab.tr-INTERVENE { fill: var(--intervene); }
-      #cf { margin-top: .5rem; font-size: .8rem; opacity: .8; font-style: italic; }
-
-      details { margin-top: 1rem; }
-      .hint { font-size: .78rem; opacity: .7; }
-      .meter label { display: block; font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; opacity: .7; }
-      .bar { height: 12px; background: #8883; border-radius: 3px; overflow: hidden; }
-      .bar > span { display: block; height: 100%; width: 0; background: #3a7; transition: width .05s linear; }
+      .tl .tr-WATCH { stroke: var(--watch); } .tl .tr-ALERT { stroke: var(--alert); } .tl .tr-INTERVENE { stroke: var(--intervene); }
+      .tl .trlab { font-family: var(--mono); font-size: 9px; text-anchor: middle; }
+      .tl .trlab.tr-WATCH { fill: var(--watch); } .tl .trlab.tr-ALERT { fill: var(--alert); } .tl .trlab.tr-INTERVENE { fill: var(--intervene); }
+      #cf { margin-top: 8px; font-size: 12px; color: var(--t2); font-style: italic; }
+      .meter label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--t2); }
+      .bar { height: 10px; background: #8883; border-radius: 3px; overflow: hidden; }
+      .bar > span { display: block; height: 100%; width: 0; background: var(--calm); transition: width .05s linear; }
     </style>
   </head>
   <body>
-    <h1>RingFence — live console</h1>
-
-    <div class="row">
-      <input id="sid" placeholder="session id" size="24" />
-      <button id="watch">Watch</button>
-      <button id="capture">Start capture</button>
-      <button id="stop" disabled>Stop</button>
-      <span class="status" id="status">idle</span>
-    </div>
-
-    <div class="grid">
-      <div class="gauge-wrap">
-        <div class="gauge"><span id="gfill"></span></div>
-        <div class="glabel" id="glabel">0 · CALM</div>
-      </div>
-      <div>
-        <div class="panel" id="transcript"></div>
-        <div id="timeline"></div>
-        <div id="cf"></div>
-      </div>
-    </div>
-
-    <details>
-      <summary>speakerphone capture — mic level (the three getUserMedia flags are off)</summary>
-      <p class="hint">
-        Put a real call on speaker. When the other person talks, the lower bar must move —
-        if it stays flat, browser echo cancellation is on and deleting the far-end voice.
-      </p>
-      <div class="meter"><label>full-band (near voice)</label><div class="bar"><span id="mwide"></span></div></div>
-      <div class="meter"><label>≤ 3.4 kHz (far / phone voice)</label><div class="bar"><span id="mtele"></span></div></div>
-    </details>
-
-    <script type="module">
-      import { mountConsole } from "/app.js";
-      import { startCapture, stopCapture } from "/capture.js";
-
-      const $ = (id) => document.getElementById(id);
-      $("sid").value = "web-" + Math.random().toString(36).slice(2, 9);
-
-      const els = {
-        gauge: $("gfill"), gaugeLabel: $("glabel"),
-        transcript: $("transcript"), timeline: $("timeline"),
-        cf: $("cf"), status: $("status"),
-      };
-      let detach = null;
-      const setBar = (el, rms) => {
-        const db = 20 * Math.log10(Math.max(rms, 1e-6));
-        el.style.width = Math.max(0, Math.min(100, ((db + 60) / 60) * 100)) + "%";
-      };
-
-      $("watch").onclick = () => {
-        detach && detach();
-        detach = mountConsole($("sid").value, els);
-        $("stop").disabled = false;
-      };
-
-      $("capture").onclick = async () => {
-        $("capture").disabled = true;
-        try {
-          await startCapture($("sid").value, {
-            onStatus: (s) => ($("status").textContent = s),
-            onLevel: ({ wide, tele }) => { setBar($("mwide"), wide); setBar($("mtele"), tele); },
-          });
-          detach && detach();
-          detach = mountConsole($("sid").value, els);
-          $("stop").disabled = false;
-        } catch (e) {
-          $("status").textContent = "error: " + e.message;
-          $("capture").disabled = false;
-        }
-      };
-
-      $("stop").onclick = () => {
-        stopCapture();
-        detach && detach();
-        $("status").textContent = "stopped";
-        $("capture").disabled = false;
-        $("stop").disabled = true;
-      };
-    </script>
+    <div id="app"></div>
+    <script type="module" src="/webapp.js"></script>
   </body>
 </html>
