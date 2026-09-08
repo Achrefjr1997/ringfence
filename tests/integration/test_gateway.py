@@ -59,16 +59,20 @@ def test_health_ok() -> None:
 
 def test_console_static_files_are_served() -> None:
     client = _app()
-    assert "speakerphone capture" in client.get("/").text
+    shell = client.get("/").text
+    assert "RingFence" in shell and "/webapp.js" in shell  # the SPA shell
+    webapp = client.get("/webapp.js").text
+    assert "/auth/login" in webapp and "/orgs/keys" in webapp  # wired to the API
+    assert "mountConsole" in webapp  # live view reuses the engine
     wk = client.get("/worklet.js")
     assert wk.status_code == 200
     assert "registerProcessor" in wk.text
     assert "text/javascript" in wk.headers["content-type"]
     cap = client.get("/capture.js").text
     assert "echoCancellation: false" in cap
+    assert "speakerphone" in cap  # capture wiring doc
     # T-3.5: the single speakerphone stream opens as leg=mixed so the pipeline
-    # runs the AcousticRoleClassifier and attributes each turn's role, rather
-    # than pinning the whole call to one role.
+    # runs the AcousticRoleClassifier and attributes each turn's role.
     assert "leg=mixed" in cap and "leg=far" not in cap
     assert "mountConsole" in client.get("/app.js").text
 
