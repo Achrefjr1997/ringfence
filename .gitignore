@@ -4,6 +4,7 @@ __pycache__/
 .env
 .env.prod
 .env.staging
+.env.local-prod
 *.decrypted
 reports/
 corpus/audio/
