@@ -31,6 +31,7 @@ from typing import Any, TypeVar, cast
 from packages.contracts.risk import Contribution, Decision
 from packages.contracts.settings import get_settings
 from packages.contracts.transcript import Role
+from packages.db.crypto import column_cipher
 from packages.db.loop import LoopThread
 from packages.intervene.cases import _FEEDBACK, Case, FeedbackLabel
 
@@ -74,10 +75,10 @@ def _decision(row: Any) -> Decision:
     )
 
 
-def _transcript(raw: Any) -> list[tuple[Role, str, float]]:
-    if not raw:
+def _transcript(plaintext: str | None) -> list[tuple[Role, str, float]]:
+    if not plaintext:
         return []
-    return [(r, t, ts) for (r, t, ts) in json.loads(raw)]
+    return [(r, t, ts) for (r, t, ts) in json.loads(plaintext)]
 
 
 class PgCaseStore:
@@ -93,6 +94,7 @@ class PgCaseStore:
 
         self._timeout_s = op_timeout_s
         self._closed = False
+        self._cipher = column_cipher()  # encrypts feedback_note + retained transcript
         self._loop = LoopThread()
         try:
 
@@ -127,6 +129,17 @@ class PgCaseStore:
     def _run(self, coro: Coroutine[object, object, _R]) -> _R:
         return self._loop.run(coro, timeout_s=self._timeout_s)
 
+    def _build_case(self, crow: Any, drows: list[Any]) -> Case:
+        return Case(
+            session_id=crow["session_id"],
+            opened_at=crow["opened_at"],
+            tenant=crow["tenant"],
+            decisions=[_decision(d) for d in drows],
+            transcript=_transcript(self._cipher.decrypt(crow["transcript"])),
+            feedback=cast(FeedbackLabel | None, crow["feedback"]),
+            feedback_note=self._cipher.decrypt(crow["feedback_note"]) or "",
+        )
+
     # -- writes -------------------------------------------------------
 
     def record(
@@ -147,7 +160,11 @@ class PgCaseStore:
         tenant: str,
     ) -> Case:
         retain = get_settings().retain_transcripts
-        transcript_json = json.dumps([list(turn) for turn in transcript]) if retain else None
+        transcript_col = (
+            self._cipher.encrypt(json.dumps([list(turn) for turn in transcript]))
+            if retain
+            else None
+        )
         async with self._pool.acquire() as conn, conn.transaction():
             await conn.execute(
                 "INSERT INTO cases (session_id, tenant, opened_at) VALUES ($1, $2, $3) "
@@ -158,9 +175,9 @@ class PgCaseStore:
             )
             if retain:
                 await conn.execute(
-                    "UPDATE cases SET transcript = $2::jsonb WHERE session_id = $1",
+                    "UPDATE cases SET transcript = $2 WHERE session_id = $1",
                     session_id,
-                    transcript_json,
+                    transcript_col,
                 )
             await conn.execute(
                 f"INSERT INTO case_decisions ({_DECISION_COLS}) VALUES ("
@@ -191,7 +208,7 @@ class PgCaseStore:
                 "RETURNING session_id",
                 session_id,
                 label,
-                note,
+                self._cipher.encrypt(note),
             )
         if hit is None:
             raise KeyError(session_id)
@@ -217,7 +234,7 @@ class PgCaseStore:
                 f"SELECT {_DECISION_COLS} FROM case_decisions WHERE session_id = $1 ORDER BY seq",
                 session_id,
             )
-        return _build_case(crow, drows)
+        return self._build_case(crow, drows)
 
     async def _list_all(self) -> list[Case]:
         async with self._pool.acquire() as conn:
@@ -231,19 +248,7 @@ class PgCaseStore:
         by_session: dict[str, list[Any]] = {}
         for d in drows:
             by_session.setdefault(d["session_id"], []).append(d)
-        return [_build_case(c, by_session.get(c["session_id"], [])) for c in crows]
+        return [self._build_case(c, by_session.get(c["session_id"], [])) for c in crows]
 
     def list(self) -> list[Case]:
         return self._run(self._list_all())
-
-
-def _build_case(crow: Any, drows: list[Any]) -> Case:
-    return Case(
-        session_id=crow["session_id"],
-        opened_at=crow["opened_at"],
-        tenant=crow["tenant"],
-        decisions=[_decision(d) for d in drows],
-        transcript=_transcript(crow["transcript"]),
-        feedback=cast(FeedbackLabel | None, crow["feedback"]),
-        feedback_note=crow["feedback_note"],
-    )
