@@ -13,3 +13,5 @@ corpus/audio/
 bin/
 cmd/gateway/bin/
 cmd/normalizer/bin/
+# local test asset (regenerate: python scripts/gen_demo_call.py)
+demo-scam-call.wav
