@@ -36,6 +36,8 @@ services:
     environment:
       RF_MODE: local
       RF_DRY_RUN: "true" # the gateway is also the actioner in the MVP
+      RF_DEV_MODE: ${RF_DEV_MODE:-1} # local: no API key needed for /events + console
+      RF_JUDGE_TIMEOUT_S: ${RF_JUDGE_TIMEOUT_S:-2.5} # real Ollama latency ~1.3-2s
       RF_NATS: nats://nats:4222
       RF_REDIS: redis://redis:6379
       # unset => in-memory identity store. Opt in with:
