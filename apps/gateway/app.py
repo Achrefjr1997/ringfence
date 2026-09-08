@@ -11,6 +11,7 @@ unprotected subscriber.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -34,6 +35,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from apps.gateway.auth import authenticate, build_auth_routes, read_json_body
+from apps.gateway.guardian import GuardianDispatcher
 from apps.gateway.orgs import build_org_routes
 from apps.gateway.ratelimit import RateLimiter, RateLimitMiddleware
 from packages.asr.null import NullASR
@@ -234,6 +236,7 @@ def create_app(
     billing_store: BillingStore | None = None,
     billing_provider: BillingProvider | None = None,
     asr: ASRProvider | None = None,
+    guardian_dispatcher: GuardianDispatcher | None = None,
     session_secret: str | None = None,
     tenants: TenantRegistry | None = None,
     quota_per_tenant: int | None = None,
@@ -647,7 +650,23 @@ def create_app(
         )
         mw.insert(0, Middleware(RateLimitMiddleware, limiter=limiter))
 
-    app = Starlette(routes=routes, on_shutdown=on_shutdown, middleware=mw)
+    # guardian webhook dispatch: watch rf.*.decision, fire on INTERVENE
+    guardian = guardian_dispatcher or GuardianDispatcher(the_tenants, the_pack, dry_run=cfg.dry_run)
+
+    @contextlib.asynccontextmanager
+    async def _lifespan(_: Starlette) -> AsyncIterator[None]:
+        task = asyncio.create_task(guardian.run(the_bus))
+        try:
+            yield
+        finally:
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
+            await guardian.aclose()
+            for close in on_shutdown:  # pool closes registered above
+                close()
+
+    app = Starlette(routes=routes, lifespan=_lifespan, middleware=mw)
     app.state.metrics = metrics
     app.state.bus = the_bus
     app.state.sessions = sessions
@@ -655,4 +674,5 @@ def create_app(
     app.state.session_secret = the_secret
     app.state.cases = the_cases
     app.state.asr_router = the_router
+    app.state.guardian = guardian
     return app

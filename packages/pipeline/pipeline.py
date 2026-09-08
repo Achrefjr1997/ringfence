@@ -256,6 +256,7 @@ class Pipeline:
                         f"rf.{self._desc.tenant_id}.decision",
                         {
                             "session_id": decision.session_id,
+                            "decision_id": decision.decision_id,
                             "t": decision.t,
                             "state": decision.state,
                             "score": decision.score,

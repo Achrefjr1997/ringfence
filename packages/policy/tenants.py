@@ -24,6 +24,9 @@ class TenantConfig(BaseModel):
     consent_required: bool = False
     languages: list[str] = Field(default_factory=lambda: ["en", "fr", "ar_tn"])
     guardian_webhook_url: str | None = None
+    # name of the env var holding this tenant's HMAC secret -- never the
+    # secret itself (tenants.yaml is committed). No secret => no webhook.
+    guardian_webhook_secret_env: str | None = None
 
 
 def event_subject(tenant_id: str, *parts: str) -> str:
