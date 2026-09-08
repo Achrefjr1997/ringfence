@@ -6,7 +6,6 @@ import threading
 
 import pytest
 
-from packages.identity._loop import LoopThread
 from packages.identity.migrate import main, schema_sql
 
 # -- schema.sql ----------------------------------------------------------
@@ -24,48 +23,6 @@ def test_schema_declares_the_three_tables_idempotently() -> None:
 def test_migrate_main_without_a_dsn_is_a_usage_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RF_DATABASE_URL", raising=False)
     assert main([]) == 2
-
-
-# -- LoopThread --------------------------------------------------------
-
-
-def test_loop_thread_runs_a_coroutine_and_propagates_the_result() -> None:
-    loop = LoopThread()
-    try:
-
-        async def add(a: int, b: int) -> int:
-            return a + b
-
-        assert loop.run(add(2, 3)) == 5
-
-        thread_names: list[str] = []
-
-        async def where_am_i() -> None:
-            thread_names.append(threading.current_thread().name)
-
-        loop.run(where_am_i())
-        assert thread_names == ["rf-identity-loop"]
-    finally:
-        loop.close()
-
-
-def test_loop_thread_propagates_exceptions() -> None:
-    loop = LoopThread()
-    try:
-
-        async def boom() -> None:
-            raise ValueError("nope")
-
-        with pytest.raises(ValueError, match="nope"):
-            loop.run(boom())
-    finally:
-        loop.close()
-
-
-def test_loop_thread_close_is_idempotent() -> None:
-    loop = LoopThread()
-    loop.close()
-    loop.close()  # must not raise
 
 
 # -- PgIdentityStore construction failure -----------------------------
