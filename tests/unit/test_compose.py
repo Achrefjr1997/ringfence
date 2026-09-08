@@ -26,6 +26,7 @@ def test_dockerfile_targets_the_gateway_asgi_app() -> None:
     text = DOCKERFILE.read_text(encoding="utf-8")
     assert "apps.gateway.main:app" in text
     # editable install with the judge extra (ollama) so the Tier-2 judge
-    # can run in-container, and the scam-pattern KB is copied in
-    assert "pip install" in text and '-e ".[judge]"' in text
+    # can run in-container, the db extra (asyncpg) for the Postgres identity
+    # store, and the scam-pattern KB is copied in
+    assert "pip install" in text and '-e ".[judge,db]"' in text
     assert "corpus/kb" in text

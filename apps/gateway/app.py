@@ -205,7 +205,17 @@ def create_app(
     the_bus = bus or InProcessBus()
     the_cases = case_store or CaseStore()
     the_tenants = tenants or load_tenants()
-    the_identity: IdentityStore = identity or InMemoryIdentityStore()
+    on_shutdown: list[Callable[[], object]] = []
+    if identity is not None:
+        the_identity: IdentityStore = identity
+    elif get_settings().database_url:
+        from packages.identity.pg_store import PgIdentityStore
+
+        pg = PgIdentityStore(get_settings().database_url or "")
+        the_identity = pg
+        on_shutdown.append(pg.close)
+    else:
+        the_identity = InMemoryIdentityStore()
     the_secret = session_secret or get_settings().session_secret
     if not the_secret:
         the_secret = secrets.token_urlsafe(32)
@@ -482,7 +492,7 @@ def create_app(
     if console.is_dir():
         routes.append(Mount("/", app=StaticFiles(directory=console, html=True)))
 
-    app = Starlette(routes=routes)
+    app = Starlette(routes=routes, on_shutdown=on_shutdown)
     app.state.metrics = metrics
     app.state.bus = the_bus
     app.state.sessions = sessions
