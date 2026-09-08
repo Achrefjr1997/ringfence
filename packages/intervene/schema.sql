@@ -4,7 +4,9 @@
 -- is IF NOT EXISTS, no down-migration, a breaking change is a new file.
 --
 -- Invariant #5 (transcripts never on disk unless RF_RETAIN_TRANSCRIPTS=true):
---   * cases.transcript      -- JSONB, left NULL unless retention is on
+--   * cases.transcript      -- TEXT, left NULL unless retention is on; when
+--     RF_DATA_ENCRYPTION_KEY is set the value is Fernet ciphertext (T-7.4)
+--   * cases.feedback_note   -- operator free text, same at-rest encryption
 --   * case_decisions.contributions -- verdict-level only (source/id/value/
 --     role/t); the per-contribution `evidence` span and judge `detail`
 --     text are dropped before write, never persisted.
@@ -15,7 +17,7 @@ CREATE TABLE IF NOT EXISTS cases (
     opened_at     DOUBLE PRECISION NOT NULL,
     feedback      TEXT,
     feedback_note TEXT        NOT NULL DEFAULT '',
-    transcript    JSONB
+    transcript    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS cases_opened_at_idx ON cases (opened_at);

@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     session_secret: str | None = None  # HMAC key for auth tokens (T-7.1b); unset => ephemeral
     # postgres DSN for the identity store (T-7.2a); unset => in-memory
     database_url: str | None = None
+    # ingress rate limiting (T-7.4), per client IP per minute
+    ratelimit_enabled: bool = True
+    ratelimit_per_min: int = 120  # everything except the auth surface
+    ratelimit_auth_per_min: int = 20  # /auth/* and /orgs/* — brute-force budget
+    # Fernet key(s) for at-rest column encryption (T-7.4); comma-separated,
+    # first is used to encrypt, all are tried to decrypt (rotation). Unset =>
+    # sensitive columns are stored in clear (dev only).
+    data_encryption_key: str | None = None
 
 
 @lru_cache

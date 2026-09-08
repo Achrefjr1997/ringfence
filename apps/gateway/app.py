@@ -35,6 +35,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from apps.gateway.auth import authenticate, build_auth_routes
 from apps.gateway.orgs import build_org_routes
+from apps.gateway.ratelimit import RateLimiter, RateLimitMiddleware
 from packages.asr.null import NullASR
 from packages.asr.provider import ASRProvider, StreamSpec
 from packages.contracts.audio import Frame, LegSpec, Mode, RoleHint, SessionDescriptor
@@ -565,7 +566,15 @@ def create_app(
     if console.is_dir():
         routes.append(Mount("/", app=StaticFiles(directory=console, html=True)))
 
-    app = Starlette(routes=routes, on_shutdown=on_shutdown, middleware=[Middleware(_AccessLog)])
+    cfg = get_settings()
+    mw = [Middleware(_AccessLog)]
+    if cfg.ratelimit_enabled:
+        limiter = RateLimiter(
+            per_min=cfg.ratelimit_per_min, auth_per_min=cfg.ratelimit_auth_per_min
+        )
+        mw.insert(0, Middleware(RateLimitMiddleware, limiter=limiter))
+
+    app = Starlette(routes=routes, on_shutdown=on_shutdown, middleware=mw)
     app.state.metrics = metrics
     app.state.bus = the_bus
     app.state.sessions = sessions
