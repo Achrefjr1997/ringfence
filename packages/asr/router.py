@@ -198,6 +198,10 @@ class ASRRouter:
     def breaker(self, provider_name: str) -> CircuitBreaker:
         return self._breakers[provider_name]
 
+    def breaker_states(self) -> dict[str, str]:
+        """``{provider_name: "closed"|"open"|"half_open"}`` for /metrics."""
+        return {name: br.state.value for name, br in self._breakers.items()}
+
     def _chain(self) -> list[str]:
         names = [n for n in self._policy.provider_order if n in self._providers]
         names += [n for n in self._providers if n not in names]

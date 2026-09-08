@@ -50,6 +50,9 @@ class ASRStream(Protocol):
 @runtime_checkable
 class ASRProvider(Protocol):
     name: str
-    capabilities: ASRCapabilities
+
+    @property
+    def capabilities(self) -> ASRCapabilities:  # read-only: a class attribute satisfies it
+        ...
 
     async def open(self, spec: StreamSpec) -> ASRStream: ...
