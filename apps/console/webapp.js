@@ -255,6 +255,12 @@ function liveView() {
       <button class="btn ghost" id="stop" disabled>Stop</button>
       <span class="mono" id="status" style="color:var(--t2);font-size:12px">idle</span>
     </div>
+    <div class="row" style="margin-top:10px;flex-wrap:wrap">
+      <input type="file" id="wav" accept="audio/*,.wav" class="field" style="width:auto;padding:6px">
+      <select class="field" id="wspeed" style="width:auto"><option value="1">1×</option><option value="3" selected>3×</option><option value="6">6×</option></select>
+      <button class="btn ghost" id="feed">Feed audio file → ASR</button>
+      <span class="mono" style="color:var(--t2);font-size:12px">real audio through AssemblyAI</span>
+    </div>
     ${key ? "" : `<div class="err" style="margin-top:10px">No API key in this session — issue one on the Keys page for the live stream to authorise (works without one only in dev mode).</div>`}
     <div class="live-grid" style="margin-top:18px">
       <div><div class="gauge"><span id="gfill"></span></div><div class="glabel" id="glabel">0 · CALM</div></div>
@@ -289,7 +295,57 @@ function liveView() {
       detach && detach(); detach = mountConsole($("#sid", c).value, els, q); $("#stop", c).disabled = false;
     } catch (e) { els.status.textContent = "error: " + e.message; $("#cap", c).disabled = false; }
   };
-  $("#stop", c).onclick = () => { stopCapture(); detach && detach(); els.status.textContent = "stopped"; $("#cap", c).disabled = false; $("#stop", c).disabled = true; };
+  // feed a local audio file: decode -> 16k mono int16 -> stream over /ws/capture
+  let feedWs = null, feedTimer = null;
+  $("#feed", c).onclick = async () => {
+    const f = $("#wav", c).files[0];
+    if (!f) { els.status.textContent = "pick a .wav / audio file first"; return; }
+    const s = $("#sid", c).value;
+    const speed = Number($("#wspeed", c).value) || 3;
+    try {
+      els.status.textContent = "decoding " + f.name + "…";
+      const ac = new AudioContext();
+      const buf = await ac.decodeAudioData(await f.arrayBuffer());
+      const off = new OfflineAudioContext(1, Math.ceil(buf.duration * 16000), 16000);
+      const src = off.createBufferSource(); src.buffer = buf; src.connect(off.destination); src.start();
+      const rendered = await off.startRendering();
+      const fl = rendered.getChannelData(0);
+      const i16 = new Int16Array(fl.length);
+      for (let i = 0; i < fl.length; i++) i16[i] = Math.max(-32768, Math.min(32767, fl[i] * 32767));
+      ac.close();
+
+      detach && detach(); detach = mountConsole(s, els, q);
+      $("#stop", c).disabled = false;
+      const wsq = q.startsWith("?") ? "&" + q.slice(1) : q;
+      feedWs = new WebSocket(`ws://${location.host}/ws/capture?session=${encodeURIComponent(s)}&leg=mixed${wsq}`);
+      feedWs.binaryType = "arraybuffer";
+      feedWs.onmessage = (e) => { try { const mm = JSON.parse(e.data); if (mm.type === "rejected") els.status.textContent = "rejected: " + mm.reason; } catch {} };
+      feedWs.onopen = () => {
+        const FRAME = 320; let pos = 0;
+        const total = i16.length;
+        feedTimer = setInterval(() => {
+          if (!feedWs || feedWs.readyState !== 1 || pos >= total) {
+            clearInterval(feedTimer); feedTimer = null;
+            if (feedWs && feedWs.readyState === 1) feedWs.close();
+            els.status.textContent = pos >= total ? "file streamed — waiting for final turns" : "stopped";
+            return;
+          }
+          feedWs.send(i16.buffer.slice(pos * 2, (pos + FRAME) * 2));
+          pos += FRAME;
+          els.status.textContent = `streaming ${(pos / 16000).toFixed(0)}s / ${(total / 16000).toFixed(0)}s`;
+        }, Math.max(2, Math.round(20 / speed)));
+      };
+    } catch (e) { els.status.textContent = "feed failed: " + (e.message || e); }
+  };
+
+  const stopAll = () => {
+    stopCapture(); detach && detach();
+    if (feedTimer) { clearInterval(feedTimer); feedTimer = null; }
+    if (feedWs && feedWs.readyState <= 1) feedWs.close();
+    feedWs = null;
+    els.status.textContent = "stopped"; $("#cap", c).disabled = false; $("#stop", c).disabled = true;
+  };
+  $("#stop", c).onclick = stopAll;
 }
 
 // ---------- router ----------
