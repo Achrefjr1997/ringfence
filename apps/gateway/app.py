@@ -179,6 +179,7 @@ class _Live:
     legs: set[str] = field(default_factory=set)
     seen_legs: set[str] = field(default_factory=set)  # every leg id ever attached
     api_key_id: str | None = None  # the key this session was admitted with, if any
+    user_ref: str | None = None  # the employee the integration attributed this call to
 
 
 def _serialise_case(case: Case) -> dict[str, object]:
@@ -218,6 +219,8 @@ def _serialise_call(rec: CallRecord, *, with_scores: bool = False) -> dict[str, 
     out: dict[str, object] = {
         "session_id": rec.session_id,
         "api_key_id": rec.api_key_id,
+        "user_ref": rec.user_ref,
+        "user_label": rec.user_label,
         "started_at": rec.started_at,
         "ended_at": rec.ended_at,
         "duration_s": round(rec.duration_s, 1),
@@ -579,6 +582,7 @@ def create_app(
             rows = the_ledger.list(
                 tenant,
                 api_key_id=q.get("key_id") or None,
+                user_ref=q.get("user") or None,
                 since=float(q["from"]) if q.get("from") else None,
                 until=float(q["to"]) if q.get("to") else None,
                 min_state=cast(State, state) if state else None,
@@ -587,6 +591,34 @@ def create_app(
         except ValueError:
             return JSONResponse({"error": "bad from/to/limit"}, status_code=400)
         return JSONResponse([_serialise_call(r) for r in rows])
+
+    async def list_call_users(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        tenant = _calls_tenant(request, user)
+        if not tenant:
+            return JSONResponse({"error": "tenant unresolved"}, status_code=400)
+        try:
+            since = (
+                float(request.query_params["from"]) if request.query_params.get("from") else None
+            )
+        except ValueError:
+            return JSONResponse({"error": "bad from"}, status_code=400)
+        return JSONResponse(
+            [
+                {
+                    "user_ref": s.user_ref,
+                    "user_label": s.user_label,
+                    "calls": s.calls,
+                    "alerts": s.alerts,
+                    "interventions": s.interventions,
+                    "last_at": s.last_at,
+                    "peak_state": s.peak_state,
+                }
+                for s in the_ledger.user_summaries(tenant, since=since)
+            ]
+        )
 
     async def get_call(request: Request) -> JSONResponse:
         user, err = case_access(request)
@@ -611,6 +643,11 @@ def create_app(
         leg = ws.query_params.get("leg", "far")
         consent = ws.query_params.get("consent")
         api_key = _bearer(ws.headers.get("authorization")) or ws.query_params.get("key")
+        # the employee the integration says was on this call (opaque id + label);
+        # scoped to the tenant of the API key, so it can only mis-label within
+        # that tenant's own data
+        user_ref = (ws.query_params.get("user") or ws.headers.get("x-ringfence-user") or "")[:200]
+        user_label = (ws.query_params.get("user_label") or "")[:200]
 
         tenant, reason, key_id = admit(
             api_key=api_key, tenant_hint=ws.query_params.get("tenant", ""), consent=consent
@@ -649,12 +686,23 @@ def create_app(
                     language="en",
                 )
             )
-            live = _Live(pipeline=pipe, tenant=tenant, started_at=time.time(), api_key_id=key_id)
+            live = _Live(
+                pipeline=pipe,
+                tenant=tenant,
+                started_at=time.time(),
+                api_key_id=key_id,
+                user_ref=user_ref or None,
+            )
             sessions[session] = live
             metrics.admitted += 1
             with contextlib.suppress(Exception):
                 the_ledger.open(
-                    session, tenant=tenant, api_key_id=key_id, started_at=live.started_at
+                    session,
+                    tenant=tenant,
+                    api_key_id=key_id,
+                    user_ref=user_ref or None,
+                    user_label=user_label or None,
+                    started_at=live.started_at,
                 )
         live.legs.add(leg)
         live.seen_legs.add(leg)
@@ -735,6 +783,7 @@ def create_app(
         Route("/cases/{session_id}", get_case),
         Route("/cases/{session_id}/feedback", post_feedback, methods=["POST"]),
         Route("/calls", list_calls),
+        Route("/calls/users", list_call_users),
         Route("/calls/{session_id}", get_call),
         Route("/usage", usage),
         Route("/orgs/plan", set_plan, methods=["POST"]),
