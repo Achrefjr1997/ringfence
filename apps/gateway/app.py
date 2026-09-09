@@ -11,6 +11,7 @@ unprotected subscriber.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -34,10 +35,12 @@ from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from apps.gateway.auth import authenticate, build_auth_routes, read_json_body
+from apps.gateway.guardian import GuardianDispatcher
 from apps.gateway.orgs import build_org_routes
 from apps.gateway.ratelimit import RateLimiter, RateLimitMiddleware
 from packages.asr.null import NullASR
 from packages.asr.provider import ASRProvider, StreamSpec
+from packages.asr.router import ASRRouter
 from packages.billing.meter import BillingStore, InMemoryBillingStore
 from packages.billing.plans import get_plans
 from packages.billing.provider import BillingProvider, NullBilling
@@ -208,25 +211,18 @@ def _serialise_verdict(case: Case) -> dict[str, object]:
 _CASE_ROLES = frozenset({"admin", "operator", "guardian"})
 
 
-def _default_provider_factory() -> ProviderFactory:
-    def factory(spec: StreamSpec) -> ASRProvider:
-        import os
-        from pathlib import Path
+def _default_asr() -> ASRProvider:
+    """The one real ASR provider, built once and shared behind the router.
 
-        key = os.environ.get("ASSEMBLYAI_API_KEY")
-        if not key:
-            env = Path(__file__).resolve().parents[2] / ".env"
-            if env.exists():
-                for line in env.read_text(encoding="utf-8").splitlines():
-                    if line.startswith("ASSEMBLYAI_API_KEY="):
-                        key = line.split("=", 1)[1].strip() or None
-        if not key:
-            return NullASR([])  # no ASR configured: sessions run, no transcript
-        from packages.asr.assemblyai import AssemblyAIStreaming
+    ``NullASR`` when no key is configured -- sessions still run, with no
+    transcript.
+    """
+    key = _read_env_key("ASSEMBLYAI_API_KEY")
+    if not key:
+        return NullASR([])
+    from packages.asr.assemblyai import AssemblyAIStreaming
 
-        return AssemblyAIStreaming(key)
-
-    return factory
+    return AssemblyAIStreaming(key)
 
 
 def create_app(
@@ -239,6 +235,8 @@ def create_app(
     identity: IdentityStore | None = None,
     billing_store: BillingStore | None = None,
     billing_provider: BillingProvider | None = None,
+    asr: ASRProvider | None = None,
+    guardian_dispatcher: GuardianDispatcher | None = None,
     session_secret: str | None = None,
     tenants: TenantRegistry | None = None,
     quota_per_tenant: int | None = None,
@@ -297,13 +295,28 @@ def create_app(
             )
         the_secret = secrets.token_urlsafe(32)
         log.warning("RF_SESSION_SECRET unset - dev_mode: using an ephemeral signing key")
-    make_provider = provider_factory or _default_provider_factory()
+    # A test passing provider_factory keeps the direct path (no router). The
+    # real path -- and any injected `asr` -- runs behind an ASRRouter so a
+    # flapping provider trips its circuit breaker and the session degrades to
+    # NullASR ("rules on signalling only") instead of dropping the call.
+    the_router: ASRRouter | None = None
+    if provider_factory is not None:
+        make_provider = provider_factory
+    else:
+        base_asr = asr or _default_asr()
+        the_router = (
+            base_asr
+            if isinstance(base_asr, ASRRouter)
+            else ASRRouter([base_asr], fallback=NullASR([]), bus=the_bus)
+        )
+
+        def make_provider(_spec: StreamSpec) -> ASRProvider:
+            assert the_router is not None
+            return the_router
+
     the_judge = (judge_factory or _default_judge_factory())(the_pack)
     metrics = GatewayMetrics()
     sessions: dict[str, _Live] = {}
-    # provider -> breaker state, for /metrics. Empty until an ASRRouter is
-    # wired into the capture path (it currently uses providers directly).
-    asr_breakers: dict[str, str] = {}
     sm = SessionManager(bus=the_bus)
 
     def admit(
@@ -382,7 +395,7 @@ def create_app(
                 admitted=metrics.admitted,
                 rejected=dict(metrics.rejected),
                 active_by_tenant=dict(by_tenant),
-                asr_breakers=dict(asr_breakers),
+                asr_breakers=the_router.breaker_states() if the_router is not None else {},
             )
         )
         return PlainTextResponse(body, media_type="text/plain; version=0.0.4")
@@ -637,11 +650,29 @@ def create_app(
         )
         mw.insert(0, Middleware(RateLimitMiddleware, limiter=limiter))
 
-    app = Starlette(routes=routes, on_shutdown=on_shutdown, middleware=mw)
+    # guardian webhook dispatch: watch rf.*.decision, fire on INTERVENE
+    guardian = guardian_dispatcher or GuardianDispatcher(the_tenants, the_pack, dry_run=cfg.dry_run)
+
+    @contextlib.asynccontextmanager
+    async def _lifespan(_: Starlette) -> AsyncIterator[None]:
+        task = asyncio.create_task(guardian.run(the_bus))
+        try:
+            yield
+        finally:
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
+            await guardian.aclose()
+            for close in on_shutdown:  # pool closes registered above
+                close()
+
+    app = Starlette(routes=routes, lifespan=_lifespan, middleware=mw)
     app.state.metrics = metrics
     app.state.bus = the_bus
     app.state.sessions = sessions
     app.state.identity = the_identity
     app.state.session_secret = the_secret
     app.state.cases = the_cases
+    app.state.asr_router = the_router
+    app.state.guardian = guardian
     return app

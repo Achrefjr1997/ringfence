@@ -66,7 +66,43 @@ services:
     volumes:
       - pg_data:/var/lib/postgresql/data
 
+  # --- monitoring (T-7.5) ------------------------------------------
+  # Internal only. Reach Prometheus / Alertmanager over an SSH tunnel, or
+  # add your own authenticated ingress. Alerts route to RF_ALERT_WEBHOOK_URL.
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+    depends_on: [gateway]
+    volumes:
+      - ./../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./../monitoring/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
+      - prom_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.0
+    restart: unless-stopped
+    depends_on: [prometheus]
+    environment:
+      RF_ALERT_WEBHOOK_URL: ${RF_ALERT_WEBHOOK_URL:?set RF_ALERT_WEBHOOK_URL}
+    volumes:
+      - ./../monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - am_data:/alertmanager
+    # the alertmanager image has no env-var templating; expand the one
+    # placeholder with busybox sed at boot ($$ -> a literal $ for the shell)
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        sed "s#https://alerts.placeholder.invalid/replace-me#$${RF_ALERT_WEBHOOK_URL}#g"
+        /etc/alertmanager/alertmanager.yml > /tmp/am.yml &&
+        exec /bin/alertmanager --config.file=/tmp/am.yml --storage.path=/alertmanager
+
 volumes:
   caddy_data:
   caddy_config:
   pg_data:
+  prom_data:
+  am_data:
