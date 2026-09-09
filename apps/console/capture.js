@@ -10,14 +10,16 @@ let ctx = null;
 let stream = null;
 let ws = null;
 
-export async function startCapture(sessionId, { onLevel, onStatus, onDecision } = {}) {
+export async function startCapture(sessionId, { onLevel, onStatus, onDecision, query = "&tenant=console" } = {}) {
   const status = (s) => onStatus && onStatus(s);
 
   // A speakerphone held to the mic is one mixed stream. Send leg=mixed so
   // the pipeline separates the far (telephone-band) party from the near
   // (room-mic) one acoustically and attributes each turn's role — rather
-  // than pinning the whole call to one role.
-  ws = new WebSocket(`ws://${GW}/ws/capture?session=${encodeURIComponent(sessionId)}&leg=mixed&tenant=console`);
+  // than pinning the whole call to one role. `query` carries ?key=/&tenant=
+  // for the authenticated (non-dev) path; the leading `?` is already here.
+  const q = query.startsWith("?") ? "&" + query.slice(1) : query;
+  ws = new WebSocket(`ws://${GW}/ws/capture?session=${encodeURIComponent(sessionId)}&leg=mixed${q}`);
   ws.binaryType = "arraybuffer";
   ws.onopen = () => status("connected");
   ws.onclose = () => status("closed");
@@ -85,7 +87,7 @@ export async function startCapture(sessionId, { onLevel, onStatus, onDecision } 
 
   // Live decisions for this session over SSE.
   if (onDecision) {
-    const es = new EventSource(`http://${GW}/events/${encodeURIComponent(sessionId)}`);
+    const es = new EventSource(`http://${GW}/events/${encodeURIComponent(sessionId)}${query || ""}`);
     es.addEventListener("decision", (ev) => onDecision(JSON.parse(ev.data)));
     es.addEventListener("end", () => es.close());
     ctx._events = es;

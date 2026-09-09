@@ -5,9 +5,9 @@
 
 const STATES = ["CALM", "WATCH", "ALERT", "INTERVENE"];
 
-export function mountConsole(sessionId, els) {
+export function mountConsole(sessionId, els, query = "") {
   const { gauge, gaugeLabel, transcript, timeline, cf, status } = els;
-  const es = new EventSource(`/events/${encodeURIComponent(sessionId)}`);
+  const es = new EventSource(`/events/${encodeURIComponent(sessionId)}${query}`);
   const marks = []; // {t, kind: "signal"|"transition", label, state}
   let maxT = 30;
   let peak = 0;

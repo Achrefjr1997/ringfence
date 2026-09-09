@@ -40,3 +40,7 @@ services:
 
   alertmanager:
     ports: ["9093:9093"]
+
+  # published locally so you can psql in / point tools at it
+  postgres:
+    ports: ["5432:5432"]
