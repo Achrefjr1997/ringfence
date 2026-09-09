@@ -6,6 +6,7 @@ tenants:
     allow_cloud: true
     consent_required: false
     languages: [en, fr, ar_tn]
+    retain_audio: true      # P7: keep call recordings (legal basis on file); needs RF_RETAIN_AUDIO=true too
 
   acme:
     quota: 25
@@ -14,9 +15,11 @@ tenants:
     languages: [en, fr]
     guardian_webhook_url: https://acme.example/ringfence/guardian
     guardian_webhook_secret_env: RF_GUARDIAN_SECRET_ACME
+    retain_audio: true
 
   aircarrier:            # a no-egress carrier
     quota: 500
     allow_cloud: false
     consent_required: true
     languages: [ar_tn, fr]
+    retain_audio: true
