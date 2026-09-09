@@ -16,4 +16,4 @@ def test_schema_is_idempotent_and_declares_both_tables() -> None:
 
 def test_migrate_runner_applies_the_billing_schema_too() -> None:
     names = [name for name, _ in _SCHEMAS]
-    assert names == ["identity", "cases", "billing"]
+    assert names == ["identity", "cases", "billing", "calls"]

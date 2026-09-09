@@ -23,6 +23,7 @@ from collections import Counter
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from sse_starlette.sse import EventSourceResponse
 from starlette.applications import Starlette
@@ -35,6 +36,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from apps.gateway.auth import authenticate, build_auth_routes, read_json_body
+from apps.gateway.call_recorder import CallLedgerRecorder
 from apps.gateway.guardian import GuardianDispatcher
 from apps.gateway.orgs import build_org_routes
 from apps.gateway.ratelimit import RateLimiter, RateLimitMiddleware
@@ -45,8 +47,10 @@ from packages.billing.meter import BillingStore, InMemoryBillingStore
 from packages.billing.plans import get_plans
 from packages.billing.provider import BillingProvider, NullBilling
 from packages.billing.service import BillingService
+from packages.calls.ledger import CallLedger, CallRecord, InMemoryCallLedger
 from packages.contracts.audio import Frame, LegSpec, Mode, RoleHint, SessionDescriptor
 from packages.contracts.events import EventBus, InProcessBus
+from packages.contracts.risk import State
 from packages.contracts.settings import get_settings
 from packages.identity.models import User
 from packages.identity.store import IdentityStore, InMemoryIdentityStore
@@ -173,6 +177,7 @@ class _Live:
     tenant: str
     started_at: float = 0.0
     legs: set[str] = field(default_factory=set)
+    seen_legs: set[str] = field(default_factory=set)  # every leg id ever attached
     api_key_id: str | None = None  # the key this session was admitted with, if any
 
 
@@ -209,7 +214,27 @@ def _serialise_verdict(case: Case) -> dict[str, object]:
     return data
 
 
+def _serialise_call(rec: CallRecord, *, with_scores: bool = False) -> dict[str, object]:
+    out: dict[str, object] = {
+        "session_id": rec.session_id,
+        "api_key_id": rec.api_key_id,
+        "started_at": rec.started_at,
+        "ended_at": rec.ended_at,
+        "duration_s": round(rec.duration_s, 1),
+        "peak_state": rec.peak_state,
+        "peak_score": round(rec.peak_score, 1),
+        "leg_count": rec.leg_count,
+        "live": rec.ended_at is None,
+    }
+    if with_scores:
+        out["scores"] = [
+            {"t": round(p.t, 2), "score": round(p.score, 2), "state": p.state} for p in rec.scores
+        ]
+    return out
+
+
 _CASE_ROLES = frozenset({"admin", "operator", "guardian"})
+_STATE_NAMES = frozenset({"CALM", "WATCH", "ALERT", "INTERVENE", "RESOLVED"})
 
 
 def _default_asr() -> ASRProvider:
@@ -235,6 +260,7 @@ def create_app(
     case_store: CaseStore | None = None,
     identity: IdentityStore | None = None,
     billing_store: BillingStore | None = None,
+    call_ledger: CallLedger | None = None,
     billing_provider: BillingProvider | None = None,
     asr: ASRProvider | None = None,
     guardian_dispatcher: GuardianDispatcher | None = None,
@@ -285,6 +311,17 @@ def create_app(
         the_billing_store = InMemoryBillingStore()
     billing = BillingService(get_plans(), the_billing_store)
     the_billing_provider = billing_provider or NullBilling()
+
+    if call_ledger is not None:
+        the_ledger: CallLedger = call_ledger
+    elif _dsn:
+        from packages.calls.pg_ledger import PgCallLedger
+
+        pg_ledger = PgCallLedger(_dsn)
+        the_ledger = pg_ledger
+        on_shutdown.append(pg_ledger.close_pool)
+    else:
+        the_ledger = InMemoryCallLedger()
 
     the_secret = session_secret or get_settings().session_secret
     if not the_secret:
@@ -522,6 +559,53 @@ def create_app(
             return JSONResponse({"error": "no such case"}, status_code=404)
         return JSONResponse(_serialise_case(case))
 
+    def _calls_tenant(request: Request, user: User | None) -> str | None:
+        if user is not None:
+            return user.org_id
+        return request.query_params.get("tenant") or None
+
+    async def list_calls(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        tenant = _calls_tenant(request, user)
+        if not tenant:
+            return JSONResponse({"error": "tenant unresolved"}, status_code=400)
+        q = request.query_params
+        state = q.get("state") or None
+        if state is not None and state not in _STATE_NAMES:
+            return JSONResponse({"error": "bad state"}, status_code=400)
+        try:
+            rows = the_ledger.list(
+                tenant,
+                api_key_id=q.get("key_id") or None,
+                since=float(q["from"]) if q.get("from") else None,
+                until=float(q["to"]) if q.get("to") else None,
+                min_state=cast(State, state) if state else None,
+                limit=min(500, int(q.get("limit", "100"))),
+            )
+        except ValueError:
+            return JSONResponse({"error": "bad from/to/limit"}, status_code=400)
+        return JSONResponse([_serialise_call(r) for r in rows])
+
+    async def get_call(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        rec = the_ledger.get(request.path_params["session_id"])
+        tenant = _calls_tenant(request, user)
+        if rec is None or (tenant is not None and rec.tenant != tenant):
+            return JSONResponse({"error": "no such call"}, status_code=404)
+        body = _serialise_call(rec, with_scores=True)
+        case = the_cases.get(rec.session_id)
+        if case is not None and (user is None or case.tenant == rec.tenant):
+            body["transcript"] = [{"role": r, "text": t, "t": ts} for (r, t, ts) in case.transcript]
+            body["has_case"] = True
+        else:
+            body["transcript"] = []
+            body["has_case"] = False
+        return JSONResponse(body)
+
     async def capture(ws: WebSocket) -> None:
         session = ws.query_params.get("session", "")
         leg = ws.query_params.get("leg", "far")
@@ -568,7 +652,12 @@ def create_app(
             live = _Live(pipeline=pipe, tenant=tenant, started_at=time.time(), api_key_id=key_id)
             sessions[session] = live
             metrics.admitted += 1
+            with contextlib.suppress(Exception):
+                the_ledger.open(
+                    session, tenant=tenant, api_key_id=key_id, started_at=live.started_at
+                )
         live.legs.add(leg)
+        live.seen_legs.add(leg)
 
         seq = 0
         try:
@@ -609,6 +698,8 @@ def create_app(
                     the_billing_provider.report_usage(
                         live.tenant, "call_minutes", minutes, ts=closed_at
                     )
+                with contextlib.suppress(Exception):
+                    the_ledger.close(session, ended_at=closed_at, leg_count=len(live.seen_legs))
 
     async def usage(request: Request) -> JSONResponse:
         user, err = case_access(request)
@@ -643,6 +734,8 @@ def create_app(
         Route("/cases", list_cases),
         Route("/cases/{session_id}", get_case),
         Route("/cases/{session_id}/feedback", post_feedback, methods=["POST"]),
+        Route("/calls", list_calls),
+        Route("/calls/{session_id}", get_call),
         Route("/usage", usage),
         Route("/orgs/plan", set_plan, methods=["POST"]),
         *build_auth_routes(the_identity, the_secret),
@@ -663,16 +756,23 @@ def create_app(
 
     # guardian webhook dispatch: watch rf.*.decision, fire on INTERVENE
     guardian = guardian_dispatcher or GuardianDispatcher(the_tenants, the_pack, dry_run=cfg.dry_run)
+    # call ledger: watch rf.*.decision, append the escalation graph
+    recorder = CallLedgerRecorder(the_ledger)
 
     @contextlib.asynccontextmanager
     async def _lifespan(_: Starlette) -> AsyncIterator[None]:
-        task = asyncio.create_task(guardian.run(the_bus))
+        tasks = [
+            asyncio.create_task(guardian.run(the_bus)),
+            asyncio.create_task(recorder.run(the_bus)),
+        ]
         try:
             yield
         finally:
-            task.cancel()
-            with contextlib.suppress(BaseException):
-                await task
+            for t in tasks:
+                t.cancel()
+            for t in tasks:
+                with contextlib.suppress(BaseException):
+                    await t
             await guardian.aclose()
             for close in on_shutdown:  # pool closes registered above
                 close()
@@ -684,6 +784,7 @@ def create_app(
     app.state.identity = the_identity
     app.state.session_secret = the_secret
     app.state.cases = the_cases
+    app.state.call_ledger = the_ledger
     app.state.asr_router = the_router
     app.state.guardian = guardian
     return app
