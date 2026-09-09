@@ -82,6 +82,23 @@ def test_hard_capped_plan_rejects_admission_with_reason_billing() -> None:
     assert c.get("/health").json()["metrics"]["rejected"]["BILLING"] == 1
 
 
+def test_a_session_attributes_its_usage_to_the_admitting_key() -> None:
+    store = InMemoryBillingStore()
+    c = _client(store)
+    token, org_id = _admin(c)
+    created = c.post("/orgs/keys", json={"name": "gw"}, headers=_h(token)).json()
+
+    with c.websocket_connect(f"/ws/capture?session=s1&leg=far&key={created['key']}") as ws:
+        ws.send_bytes(b"\x00\x00" * 320)
+
+    listed = c.get("/orgs/keys", headers=_h(token)).json()
+    row = next(k for k in listed if k["id"] == created["id"])
+    assert row["calls"] == 1
+    assert row["call_minutes"] >= 0.0
+    # the tenant total still counts it too
+    assert store.totals(org_id).calls == 1
+
+
 def test_a_metered_plan_is_never_billing_blocked() -> None:
     store = InMemoryBillingStore()
     c = _client(store)

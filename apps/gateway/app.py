@@ -173,6 +173,7 @@ class _Live:
     tenant: str
     started_at: float = 0.0
     legs: set[str] = field(default_factory=set)
+    api_key_id: str | None = None  # the key this session was admitted with, if any
 
 
 def _serialise_case(case: Case) -> dict[str, object]:
@@ -321,43 +322,49 @@ def create_app(
 
     def admit(
         *, api_key: str | None, tenant_hint: str, consent: str | None
-    ) -> tuple[str | None, str | None]:
-        """Return ``(tenant, reject_reason)`` — exactly one is ``None``.
+    ) -> tuple[str | None, str | None, str | None]:
+        """Return ``(tenant, reject_reason, api_key_id)``.
+
+        Exactly one of ``tenant`` / ``reject_reason`` is ``None``.  ``api_key_id``
+        is the id of the key the session was admitted with, for per-key usage
+        attribution -- ``None`` in ``dev_mode`` (no key required).
 
         §3.6 order, with AUTH first: outside ``dev_mode`` the tenant comes
         from a valid API key, never a query param.
         """
+        key_id: str | None = None
         if dev_mode:
             tenant = tenant_hint
             if not tenant.strip():
-                return None, "TENANT"
+                return None, "TENANT", None
             cfg = the_tenants.get(tenant)
             if (cfg.consent_required or not dev_consent) and not consent:
-                return None, "CONSENT"
+                return None, "CONSENT", None
         else:
             if not api_key:
-                return None, "AUTH"
+                return None, "AUTH", None
             key = the_identity.resolve_api_key(api_key)
             if key is None:
-                return None, "AUTH"
+                return None, "AUTH", None
             org = the_identity.get_org(key.org_id)
             if org is None:
-                return None, "AUTH"
+                return None, "AUTH", None
             key.last_used_at = time.time()
+            key_id = key.id
             tenant = org.tenant
             cfg = the_tenants.get(tenant)
             # a hard-capped plan (free/pilot) stops admitting once its
             # monthly minute allowance is spent; metered plans just accrue
             if billing.over_hard_cap(tenant):
-                return None, "BILLING"
+                return None, "BILLING", None
 
         quota = quota_per_tenant if quota_per_tenant is not None else cfg.quota
         active_for_tenant = sum(1 for s in sessions.values() if s.tenant == tenant)
         if active_for_tenant >= quota:
-            return None, "QUOTA"
+            return None, "QUOTA", None
         if len(sessions) >= capacity:
-            return None, "CAPACITY"
-        return tenant, None
+            return None, "CAPACITY", None
+        return tenant, None, key_id
 
     def read_tenant(request: Request) -> tuple[str | None, str | None]:
         """Resolve the tenant scope for a read endpoint (``/events``).
@@ -521,7 +528,7 @@ def create_app(
         consent = ws.query_params.get("consent")
         api_key = _bearer(ws.headers.get("authorization")) or ws.query_params.get("key")
 
-        tenant, reason = admit(
+        tenant, reason, key_id = admit(
             api_key=api_key, tenant_hint=ws.query_params.get("tenant", ""), consent=consent
         )
         if reason is not None:
@@ -558,7 +565,7 @@ def create_app(
                     language="en",
                 )
             )
-            live = _Live(pipeline=pipe, tenant=tenant, started_at=time.time())
+            live = _Live(pipeline=pipe, tenant=tenant, started_at=time.time(), api_key_id=key_id)
             sessions[session] = live
             metrics.admitted += 1
         live.legs.add(leg)
@@ -592,8 +599,12 @@ def create_app(
                     await live.pipeline.end(session)
                 closed_at = time.time()
                 minutes = max(0.0, (closed_at - live.started_at) / 60.0)
-                the_billing_store.record(live.tenant, "call_minutes", minutes, ts=closed_at)
-                the_billing_store.record(live.tenant, "calls", 1, ts=closed_at)
+                the_billing_store.record(
+                    live.tenant, "call_minutes", minutes, key_id=live.api_key_id, ts=closed_at
+                )
+                the_billing_store.record(
+                    live.tenant, "calls", 1, key_id=live.api_key_id, ts=closed_at
+                )
                 with contextlib.suppress(Exception):
                     the_billing_provider.report_usage(
                         live.tenant, "call_minutes", minutes, ts=closed_at
@@ -635,7 +646,7 @@ def create_app(
         Route("/usage", usage),
         Route("/orgs/plan", set_plan, methods=["POST"]),
         *build_auth_routes(the_identity, the_secret),
-        *build_org_routes(the_identity, the_secret),
+        *build_org_routes(the_identity, the_secret, billing=the_billing_store),
         WebSocketRoute("/ws/capture", capture),
     ]
     console = Path(__file__).resolve().parents[1] / "console"

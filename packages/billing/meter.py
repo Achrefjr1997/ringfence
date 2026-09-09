@@ -6,8 +6,10 @@
 implementation -- nothing above this interface changes between them, same
 as the identity and case stores.
 
-Everything is keyed by ``tenant`` (which equals the org id) and a billing
-``period`` -- a ``YYYY-MM`` string in UTC.
+Tenant-level counters drive billing.  When a session was admitted with an
+API key, the same usage is also recorded against that key so an admin can
+see which integration is spending minutes (``key_totals``).  Everything is
+keyed by a billing ``period`` -- a ``YYYY-MM`` string in UTC.
 """
 
 from __future__ import annotations
@@ -15,11 +17,11 @@ from __future__ import annotations
 import datetime as _dt
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
 Metric = Literal["call_minutes", "calls", "guardian_notifications"]
-_METRICS: tuple[Metric, ...] = ("call_minutes", "calls", "guardian_notifications")
 
 
 def billing_period(ts: float | None = None) -> str:
@@ -38,10 +40,18 @@ class UsageTotals:
 
 class BillingStore(Protocol):
     def record(
-        self, tenant: str, metric: Metric, quantity: float, *, ts: float | None = None
+        self,
+        tenant: str,
+        metric: Metric,
+        quantity: float,
+        *,
+        key_id: str | None = None,
+        ts: float | None = None,
     ) -> None: ...
 
     def totals(self, tenant: str, period: str | None = None) -> UsageTotals: ...
+
+    def key_totals(self, tenant: str, key_id: str, period: str | None = None) -> UsageTotals: ...
 
     def plan_id(self, tenant: str) -> str | None: ...
 
@@ -51,23 +61,46 @@ class BillingStore(Protocol):
 class InMemoryBillingStore:
     def __init__(self) -> None:
         self._counters: dict[tuple[str, str, str], float] = defaultdict(float)
+        self._by_key: dict[tuple[str, str, str, str], float] = defaultdict(float)
         self._plans: dict[str, str] = {}
 
     def record(
-        self, tenant: str, metric: Metric, quantity: float, *, ts: float | None = None
+        self,
+        tenant: str,
+        metric: Metric,
+        quantity: float,
+        *,
+        key_id: str | None = None,
+        ts: float | None = None,
     ) -> None:
-        if quantity:
-            self._counters[(tenant, billing_period(ts), metric)] += quantity
+        if not quantity:
+            return
+        p = billing_period(ts)
+        self._counters[(tenant, p, metric)] += quantity
+        if key_id:
+            self._by_key[(tenant, key_id, p, metric)] += quantity
 
-    def totals(self, tenant: str, period: str | None = None) -> UsageTotals:
+    def _totals(
+        self,
+        get: Callable[[Metric, str], float],
+        tenant: str,
+        period: str | None,
+    ) -> UsageTotals:
         p = period or billing_period()
-        vals = {m: self._counters.get((tenant, p, m), 0.0) for m in _METRICS}
         return UsageTotals(
             tenant=tenant,
             period=p,
-            call_minutes=vals["call_minutes"],
-            calls=int(vals["calls"]),
-            guardian_notifications=int(vals["guardian_notifications"]),
+            call_minutes=get("call_minutes", p),
+            calls=int(get("calls", p)),
+            guardian_notifications=int(get("guardian_notifications", p)),
+        )
+
+    def totals(self, tenant: str, period: str | None = None) -> UsageTotals:
+        return self._totals(lambda m, p: self._counters.get((tenant, p, m), 0.0), tenant, period)
+
+    def key_totals(self, tenant: str, key_id: str, period: str | None = None) -> UsageTotals:
+        return self._totals(
+            lambda m, p: self._by_key.get((tenant, key_id, p, m), 0.0), tenant, period
         )
 
     def plan_id(self, tenant: str) -> str | None:

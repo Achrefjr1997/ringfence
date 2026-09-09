@@ -29,7 +29,7 @@ def store() -> Iterator[PgBillingStore]:
 
 async def _truncate(s: PgBillingStore) -> None:
     async with s._pool.acquire() as conn:
-        await conn.execute("TRUNCATE usage_counters, org_billing")
+        await conn.execute("TRUNCATE usage_counters, usage_key_counters, org_billing")
 
 
 def test_record_upserts_additively(store: PgBillingStore) -> None:
@@ -41,6 +41,22 @@ def test_record_upserts_additively(store: PgBillingStore) -> None:
     m = store.totals("t1", "2026-03")
     assert m.call_minutes == 15.5 and m.calls == 3
     assert store.totals("t1", "2026-04").call_minutes == 0.0
+
+
+def test_key_totals_attribute_usage_alongside_the_tenant_total(
+    store: PgBillingStore,
+) -> None:
+    ts = 1_773_921_600.0  # 2026-03
+    store.record("t1", "call_minutes", 10.0, key_id="k1", ts=ts)
+    store.record("t1", "call_minutes", 4.0, key_id="k2", ts=ts)
+    store.record("t1", "call_minutes", 1.0, ts=ts)  # no key
+    store.record("t1", "calls", 2, key_id="k1", ts=ts)
+
+    assert store.totals("t1", "2026-03").call_minutes == 15.0
+    k1 = store.key_totals("t1", "k1", "2026-03")
+    assert k1.call_minutes == 10.0 and k1.calls == 2
+    assert store.key_totals("t1", "k2", "2026-03").call_minutes == 4.0
+    assert store.key_totals("t1", "k1", "2026-04").call_minutes == 0.0
 
 
 def test_plan_assignment_round_trips(store: PgBillingStore) -> None:

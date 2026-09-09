@@ -152,11 +152,12 @@ async function keysView() {
       const keys = await api("/orgs/keys");
       list.innerHTML = "";
       const t = el("table");
-      t.innerHTML = "<thead><tr><th>name</th><th>prefix</th><th>created</th><th>last used</th><th></th></tr></thead>";
+      t.innerHTML = "<thead><tr><th>name</th><th>prefix</th><th>created</th><th>last used</th><th>this month</th><th></th></tr></thead>";
       const tb = el("tbody");
       for (const k of keys) {
         const tr = el("tr");
-        tr.innerHTML = `<td>${esc(k.name)}</td><td class="mono" style="color:var(--t2)">${esc(k.prefix)}…</td><td class="mono" style="color:var(--t2)">${new Date(k.created_at * 1000).toLocaleString()}</td><td class="mono" style="color:var(--t2)">${k.last_used_at ? new Date(k.last_used_at * 1000).toLocaleTimeString() : "—"}</td><td></td>`;
+        const usage = `${(k.call_minutes ?? 0).toFixed(1)} min · ${k.calls ?? 0} calls`;
+        tr.innerHTML = `<td>${esc(k.name)}</td><td class="mono" style="color:var(--t2)">${esc(k.prefix)}…</td><td class="mono" style="color:var(--t2)">${new Date(k.created_at * 1000).toLocaleString()}</td><td class="mono" style="color:var(--t2)">${k.last_used_at ? new Date(k.last_used_at * 1000).toLocaleTimeString() : "—"}</td><td class="mono" style="color:var(--t2)">${usage}</td><td></td>`;
         if (!k.revoked && admin) {
           const b = el("button", { className: "btn danger", textContent: "Revoke", style: "padding:4px 10px;font-size:12px" });
           b.onclick = async () => { await api(`/orgs/keys/${k.id}`, { method: "DELETE" }); refresh(); };

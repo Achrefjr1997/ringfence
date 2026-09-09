@@ -23,6 +23,17 @@ def schema_sql() -> str:
     return _SCHEMA_PATH.read_text(encoding="utf-8")
 
 
+def _totals_from_rows(tenant: str, period: str, rows: Any) -> UsageTotals:
+    by = {r["metric"]: r["quantity"] for r in rows}
+    return UsageTotals(
+        tenant=tenant,
+        period=period,
+        call_minutes=by.get("call_minutes", 0.0),
+        calls=int(by.get("calls", 0.0)),
+        guardian_notifications=int(by.get("guardian_notifications", 0.0)),
+    )
+
+
 class PgBillingStore:
     def __init__(
         self, dsn: str, *, min_size: int = 1, max_size: int = 4, op_timeout_s: float = 10.0
@@ -71,13 +82,21 @@ class PgBillingStore:
     # -- usage ------------------------------------------------------
 
     def record(
-        self, tenant: str, metric: Metric, quantity: float, *, ts: float | None = None
+        self,
+        tenant: str,
+        metric: Metric,
+        quantity: float,
+        *,
+        key_id: str | None = None,
+        ts: float | None = None,
     ) -> None:
         if not quantity:
             return
-        self._run(self._record(tenant, billing_period(ts), metric, float(quantity)))
+        self._run(self._record(tenant, key_id, billing_period(ts), metric, float(quantity)))
 
-    async def _record(self, tenant: str, period: str, metric: str, quantity: float) -> None:
+    async def _record(
+        self, tenant: str, key_id: str | None, period: str, metric: str, quantity: float
+    ) -> None:
         async with self._pool.acquire() as conn:
             await conn.execute(
                 "INSERT INTO usage_counters (tenant, period, metric, quantity) "
@@ -89,6 +108,18 @@ class PgBillingStore:
                 metric,
                 quantity,
             )
+            if key_id:
+                await conn.execute(
+                    "INSERT INTO usage_key_counters (tenant, key_id, period, metric, quantity) "
+                    "VALUES ($1, $2, $3, $4, $5) "
+                    "ON CONFLICT (tenant, key_id, period, metric) "
+                    "DO UPDATE SET quantity = usage_key_counters.quantity + EXCLUDED.quantity",
+                    tenant,
+                    key_id,
+                    period,
+                    metric,
+                    quantity,
+                )
 
     def totals(self, tenant: str, period: str | None = None) -> UsageTotals:
         return self._run(self._totals(tenant, period or billing_period()))
@@ -100,14 +131,21 @@ class PgBillingStore:
                 tenant,
                 period,
             )
-        by = {r["metric"]: r["quantity"] for r in rows}
-        return UsageTotals(
-            tenant=tenant,
-            period=period,
-            call_minutes=by.get("call_minutes", 0.0),
-            calls=int(by.get("calls", 0.0)),
-            guardian_notifications=int(by.get("guardian_notifications", 0.0)),
-        )
+        return _totals_from_rows(tenant, period, rows)
+
+    def key_totals(self, tenant: str, key_id: str, period: str | None = None) -> UsageTotals:
+        return self._run(self._key_totals(tenant, key_id, period or billing_period()))
+
+    async def _key_totals(self, tenant: str, key_id: str, period: str) -> UsageTotals:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT metric, quantity FROM usage_key_counters "
+                "WHERE tenant = $1 AND key_id = $2 AND period = $3",
+                tenant,
+                key_id,
+                period,
+            )
+        return _totals_from_rows(tenant, period, rows)
 
     # -- plan assignment -----------------------------------------
 
