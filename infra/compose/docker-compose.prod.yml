@@ -25,6 +25,7 @@ services:
       RF_DOMAIN: ${RF_DOMAIN:?set RF_DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
       RF_ACME_CA: ${RF_ACME_CA:-}
+      RF_TLS: ${RF_TLS:-}  # "" in prod; "tls internal" for a localhost run
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -33,7 +34,10 @@ services:
   gateway:
     image: ghcr.io/achrefjr1997/ringfence-gateway:${RF_IMAGE_TAG:?set RF_IMAGE_TAG}
     restart: unless-stopped
-    depends_on: [nats, redis, postgres]
+    depends_on:
+      nats: {condition: service_started}
+      redis: {condition: service_started}
+      postgres: {condition: service_healthy}
     expose: ["8000"]
     environment:
       RF_MODE: production
@@ -47,6 +51,9 @@ services:
       RF_ASR_PROVIDER: ${RF_ASR_PROVIDER:-null}
       ASSEMBLYAI_API_KEY: ${ASSEMBLYAI_API_KEY:-}
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+      RF_JUDGE_TIMEOUT_S: ${RF_JUDGE_TIMEOUT_S:-2.5}  # Ollama Cloud p99 ~2s; 0.8s default times out
+      RF_RETAIN_TRANSCRIPTS: ${RF_RETAIN_TRANSCRIPTS:-false}
+      RF_DATA_ENCRYPTION_KEY: ${RF_DATA_ENCRYPTION_KEY:-}
 
   nats:
     image: nats:2-alpine
@@ -65,6 +72,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-ringfence}
     volumes:
       - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB:-ringfence}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   # --- monitoring (T-7.5) ------------------------------------------
   # Internal only. Reach Prometheus / Alertmanager over an SSH tunnel, or
