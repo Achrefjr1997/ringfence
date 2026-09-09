@@ -36,3 +36,30 @@ CREATE TABLE IF NOT EXISTS call_scores (
     state       TEXT             NOT NULL,
     PRIMARY KEY (session_id, t)
 );
+
+-- P3: threaded review comments. A reviewer's words, not call content --
+-- retained regardless of RF_RETAIN_TRANSCRIPTS.
+CREATE TABLE IF NOT EXISTS call_comments (
+    id           TEXT             PRIMARY KEY,
+    session_id   TEXT             NOT NULL REFERENCES call_ledger (session_id) ON DELETE CASCADE,
+    tenant       TEXT             NOT NULL,
+    author_id    TEXT             NOT NULL,
+    author_email TEXT             NOT NULL,
+    body         TEXT             NOT NULL,
+    visibility   TEXT             NOT NULL DEFAULT 'org',   -- org | private | mentions
+    t_seconds    DOUBLE PRECISION,                          -- NULL = general, else a moment
+    parent_id    TEXT             REFERENCES call_comments (id) ON DELETE CASCADE,
+    created_at   DOUBLE PRECISION NOT NULL,
+    edited_at    DOUBLE PRECISION,
+    resolved_at  DOUBLE PRECISION,
+    resolved_by  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS call_comments_session_idx
+    ON call_comments (session_id, created_at);
+
+CREATE TABLE IF NOT EXISTS call_comment_mentions (
+    comment_id        TEXT NOT NULL REFERENCES call_comments (id) ON DELETE CASCADE,
+    mentioned_user_id TEXT NOT NULL,
+    PRIMARY KEY (comment_id, mentioned_user_id)
+);

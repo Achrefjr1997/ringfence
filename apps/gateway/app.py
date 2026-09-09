@@ -47,6 +47,12 @@ from packages.billing.meter import BillingStore, InMemoryBillingStore
 from packages.billing.plans import get_plans
 from packages.billing.provider import BillingProvider, NullBilling
 from packages.billing.service import BillingService
+from packages.calls.comments import (
+    Comment,
+    CommentError,
+    CommentStore,
+    InMemoryCommentStore,
+)
 from packages.calls.ledger import CallLedger, CallRecord, InMemoryCallLedger
 from packages.contracts.audio import Frame, LegSpec, Mode, RoleHint, SessionDescriptor
 from packages.contracts.events import EventBus, InProcessBus
@@ -236,6 +242,22 @@ def _serialise_call(rec: CallRecord, *, with_scores: bool = False) -> dict[str, 
     return out
 
 
+def _serialise_comment(c: Comment) -> dict[str, object]:
+    return {
+        "id": c.id,
+        "author_email": c.author_email,
+        "body": c.body,
+        "visibility": c.visibility,
+        "t_seconds": c.t_seconds,
+        "parent_id": c.parent_id,
+        "mentions": list(c.mentions),
+        "created_at": c.created_at,
+        "edited_at": c.edited_at,
+        "resolved_at": c.resolved_at,
+        "resolved_by": c.resolved_by,
+    }
+
+
 _CASE_ROLES = frozenset({"admin", "operator", "guardian"})
 _STATE_NAMES = frozenset({"CALM", "WATCH", "ALERT", "INTERVENE", "RESOLVED"})
 
@@ -264,6 +286,7 @@ def create_app(
     identity: IdentityStore | None = None,
     billing_store: BillingStore | None = None,
     call_ledger: CallLedger | None = None,
+    comment_store: CommentStore | None = None,
     billing_provider: BillingProvider | None = None,
     asr: ASRProvider | None = None,
     guardian_dispatcher: GuardianDispatcher | None = None,
@@ -325,6 +348,17 @@ def create_app(
         on_shutdown.append(pg_ledger.close_pool)
     else:
         the_ledger = InMemoryCallLedger()
+
+    if comment_store is not None:
+        the_comments_store: CommentStore = comment_store
+    elif _dsn:
+        from packages.calls.pg_comments import PgCommentStore
+
+        pg_comments = PgCommentStore(_dsn)
+        the_comments_store = pg_comments
+        on_shutdown.append(pg_comments.close_pool)
+    else:
+        the_comments_store = InMemoryCommentStore()
 
     the_secret = session_secret or get_settings().session_secret
     if not the_secret:
@@ -638,6 +672,132 @@ def create_app(
             body["has_case"] = False
         return JSONResponse(body)
 
+    # -- threaded review comments (P3) ------------------------------
+
+    def _actor(user: User | None) -> tuple[str, str, bool]:
+        """(id, email, is_admin) — a synthetic 'dev' actor when unauthenticated."""
+        if user is None:
+            return "dev", "dev@local", True
+        return user.id, user.email, user.role == "admin"
+
+    def _call_for_comment(request: Request, user: User | None) -> CallRecord | None:
+        rec = the_ledger.get(request.path_params["session_id"])
+        tenant = _calls_tenant(request, user)
+        if rec is None or (tenant is not None and rec.tenant != tenant):
+            return None
+        return rec
+
+    async def list_comments(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        rec = _call_for_comment(request, user)
+        if rec is None:
+            return JSONResponse({"error": "no such call"}, status_code=404)
+        uid, _email, is_admin = _actor(user)
+        cs = [
+            c
+            for c in the_comments_store.list_for_call(rec.session_id)
+            if c.visible_to(None if user is None else uid, is_admin=is_admin)
+        ]
+        return JSONResponse([_serialise_comment(c) for c in cs])
+
+    async def add_comment(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        if user is not None and user.role == "guardian":
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        rec = _call_for_comment(request, user)
+        if rec is None:
+            return JSONResponse({"error": "no such call"}, status_code=404)
+        uid, email, _is_admin = _actor(user)
+        payload = await read_json_body(request)
+        t_raw = payload.get("t_seconds")
+        mentions = _resolve_mentions(payload.get("mentions", []), rec.tenant)
+        try:
+            t_seconds = (
+                float(t_raw) if isinstance(t_raw, (int, float, str)) and t_raw != "" else None
+            )
+            c = the_comments_store.add(
+                session_id=rec.session_id,
+                tenant=rec.tenant,
+                author_id=uid,
+                author_email=email,
+                body=str(payload.get("body", "")),
+                visibility=str(payload.get("visibility", "org")),  # type: ignore[arg-type]
+                t_seconds=t_seconds,
+                parent_id=str(payload["parent_id"]) if payload.get("parent_id") else None,
+                mentions=mentions,
+            )
+        except (CommentError, ValueError, TypeError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(_serialise_comment(c), status_code=201)
+
+    async def edit_comment(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        rec = _call_for_comment(request, user)
+        if rec is None:
+            return JSONResponse({"error": "no such call"}, status_code=404)
+        uid, _email, is_admin = _actor(user)
+        body = str((await read_json_body(request)).get("body", ""))
+        try:
+            c = the_comments_store.edit(
+                request.path_params["comment_id"], actor_id=uid, is_admin=is_admin, body=body
+            )
+        except CommentError as exc:
+            code = 404 if "no such" in str(exc) else 403
+            return JSONResponse({"error": str(exc)}, status_code=code)
+        return JSONResponse(_serialise_comment(c))
+
+    async def delete_comment(request: Request) -> Response:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        rec = _call_for_comment(request, user)
+        if rec is None:
+            return JSONResponse({"error": "no such call"}, status_code=404)
+        uid, _email, is_admin = _actor(user)
+        try:
+            the_comments_store.delete(
+                request.path_params["comment_id"], actor_id=uid, is_admin=is_admin
+            )
+        except CommentError as exc:
+            code = 404 if "no such" in str(exc) else 403
+            return JSONResponse({"error": str(exc)}, status_code=code)
+        return Response(status_code=204)
+
+    async def resolve_comment(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        if user is not None and user.role == "guardian":
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        rec = _call_for_comment(request, user)
+        if rec is None:
+            return JSONResponse({"error": "no such call"}, status_code=404)
+        uid, _email, _is_admin = _actor(user)
+        resolved = bool((await read_json_body(request)).get("resolved", True))
+        try:
+            c = the_comments_store.set_resolved(
+                request.path_params["comment_id"], actor_id=uid, resolved=resolved
+            )
+        except CommentError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        return JSONResponse(_serialise_comment(c))
+
+    def _resolve_mentions(raw: object, tenant: str) -> tuple[str, ...]:
+        if not isinstance(raw, list):
+            return ()
+        out: list[str] = []
+        for entry in raw:
+            u = the_identity.get_user_by_email(str(entry).strip().lower())
+            if u is not None and u.org_id == tenant:
+                out.append(u.id)
+        return tuple(dict.fromkeys(out))
+
     async def capture(ws: WebSocket) -> None:
         session = ws.query_params.get("session", "")
         leg = ws.query_params.get("leg", "far")
@@ -785,6 +945,15 @@ def create_app(
         Route("/calls", list_calls),
         Route("/calls/users", list_call_users),
         Route("/calls/{session_id}", get_call),
+        Route("/calls/{session_id}/comments", list_comments),
+        Route("/calls/{session_id}/comments", add_comment, methods=["POST"]),
+        Route("/calls/{session_id}/comments/{comment_id}", edit_comment, methods=["PATCH"]),
+        Route("/calls/{session_id}/comments/{comment_id}", delete_comment, methods=["DELETE"]),
+        Route(
+            "/calls/{session_id}/comments/{comment_id}/resolve",
+            resolve_comment,
+            methods=["POST"],
+        ),
         Route("/usage", usage),
         Route("/orgs/plan", set_plan, methods=["POST"]),
         *build_auth_routes(the_identity, the_secret),
@@ -834,6 +1003,7 @@ def create_app(
     app.state.session_secret = the_secret
     app.state.cases = the_cases
     app.state.call_ledger = the_ledger
+    app.state.comment_store = the_comments_store
     app.state.asr_router = the_router
     app.state.guardian = guardian
     return app
