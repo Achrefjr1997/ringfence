@@ -13,3 +13,6 @@ def test_schema_declares_both_tables_and_is_idempotent() -> None:
     assert sql.count("CREATE INDEX ") == sql.count("CREATE INDEX IF NOT EXISTS ")
     # the score series is wiped with its call
     assert "ON DELETE CASCADE" in sql
+    # P2 columns, patched onto an already-migrated table idempotently
+    assert "user_ref" in sql and "user_label" in sql
+    assert sql.count("ALTER TABLE ") == sql.count("ADD COLUMN IF NOT EXISTS ")

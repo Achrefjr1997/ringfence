@@ -239,12 +239,15 @@ function fmtDur(s) {
 }
 
 async function callsView() {
-  const m = page("Calls", "Every call this org has run — filter by the API key that drove it.");
+  const m = page("Calls", "Every call this org has run — by employee and by the API key that drove it.");
   shell("#/calls", m);
-  const bar = el("div", { className: "row", style: "gap:10px;margin-bottom:14px" });
-  const sel = el("select", { className: "field", style: "max-width:260px" });
+  const bar = el("div", { className: "row", style: "gap:10px;margin-bottom:14px;flex-wrap:wrap" });
+  const grp = el("select", { className: "field", style: "max-width:170px" });
+  grp.innerHTML = `<option value="calls">All calls</option><option value="users">By employee</option>`;
+  const sel = el("select", { className: "field", style: "max-width:240px" });
   sel.innerHTML = `<option value="">all API keys</option>`;
-  bar.append(sel);
+  const usr = el("input", { className: "field", style: "max-width:220px", placeholder: "filter by employee id" });
+  bar.append(grp, sel, usr);
   m.append(bar);
   const box = el("div", { className: "card" }); box.textContent = "loading…"; m.append(box);
 
@@ -256,29 +259,60 @@ async function callsView() {
     }
   } catch { /* operator role can't list keys; filter stays "all" */ }
 
+  function q() {
+    const p = new URLSearchParams();
+    if (sel.value) p.set("key_id", sel.value);
+    if (usr.value.trim()) p.set("user", usr.value.trim());
+    const s = p.toString();
+    return s ? "?" + s : "";
+  }
+
+  async function loadCalls() {
+    const calls = await api("/calls" + q());
+    box.innerHTML = "";
+    const t = el("table");
+    t.innerHTML = "<thead><tr><th>started</th><th>employee</th><th>API key</th><th>duration</th><th>peak</th><th>score</th><th></th></tr></thead>";
+    const tb = el("tbody");
+    for (const c of calls) {
+      const tr = el("tr", { style: "cursor:pointer" });
+      const started = c.started_at ? new Date(c.started_at * 1000).toLocaleString() : "—";
+      const un = c.user_ref ? esc(c.user_label || c.user_ref) : "<span style='color:var(--t2)'>—</span>";
+      const kn = c.api_key_id ? esc(keyName[c.api_key_id] || c.api_key_id.slice(0, 8)) : "<span style='color:var(--t2)'>dev / none</span>";
+      const liveTag = c.live ? `<span class="pill st-WATCH">live</span>` : "";
+      tr.innerHTML = `<td class="mono" style="color:var(--t2)">${started}</td><td>${un}</td><td>${kn}</td><td class="mono">${c.live ? "—" : fmtDur(c.duration_s)}</td><td><span class="pill st-${c.peak_state}">${c.peak_state}</span></td><td class="mono">${c.peak_score}</td><td>${liveTag}</td>`;
+      tr.onclick = () => { location.hash = `#/calls/${encodeURIComponent(c.session_id)}`; };
+      tb.append(tr);
+    }
+    t.append(tb); box.append(t);
+    if (!calls.length) box.append(el("div", { className: "sub", textContent: "no calls yet — run one from the Live view" }));
+  }
+
+  async function loadUsers() {
+    const rows = await api("/calls/users");
+    box.innerHTML = "";
+    const t = el("table");
+    t.innerHTML = "<thead><tr><th>employee</th><th>calls</th><th>alerts</th><th>interventions</th><th>peak</th><th>last</th></tr></thead>";
+    const tb = el("tbody");
+    for (const u of rows) {
+      const tr = el("tr", { style: "cursor:pointer" });
+      const last = u.last_at ? new Date(u.last_at * 1000).toLocaleString() : "—";
+      tr.innerHTML = `<td>${esc(u.user_label || u.user_ref)}</td><td class="mono">${u.calls}</td><td class="mono">${u.alerts}</td><td class="mono">${u.interventions}</td><td><span class="pill st-${u.peak_state}">${u.peak_state}</span></td><td class="mono" style="color:var(--t2)">${last}</td>`;
+      tr.onclick = () => { grp.value = "calls"; usr.value = u.user_ref; load(); };
+      tb.append(tr);
+    }
+    t.append(tb); box.append(t);
+    if (!rows.length) box.append(el("div", { className: "sub", textContent: "no calls attributed to an employee yet — the integration passes ?user=<id> on /ws/capture" }));
+  }
+
   async function load() {
     box.textContent = "loading…";
-    try {
-      const q = sel.value ? `?key_id=${encodeURIComponent(sel.value)}` : "";
-      const calls = await api("/calls" + q);
-      box.innerHTML = "";
-      const t = el("table");
-      t.innerHTML = "<thead><tr><th>started</th><th>API key</th><th>duration</th><th>peak</th><th>score</th><th></th></tr></thead>";
-      const tb = el("tbody");
-      for (const c of calls) {
-        const tr = el("tr", { style: "cursor:pointer" });
-        const started = c.started_at ? new Date(c.started_at * 1000).toLocaleString() : "—";
-        const kn = c.api_key_id ? esc(keyName[c.api_key_id] || c.api_key_id.slice(0, 8)) : "<span style='color:var(--t2)'>dev / none</span>";
-        const liveTag = c.live ? `<span class="pill st-WATCH">live</span>` : "";
-        tr.innerHTML = `<td class="mono" style="color:var(--t2)">${started}</td><td>${kn}</td><td class="mono">${c.live ? "—" : fmtDur(c.duration_s)}</td><td><span class="pill st-${c.peak_state}">${c.peak_state}</span></td><td class="mono">${c.peak_score}</td><td>${liveTag}</td>`;
-        tr.onclick = () => { location.hash = `#/calls/${encodeURIComponent(c.session_id)}`; };
-        tb.append(tr);
-      }
-      t.append(tb); box.append(t);
-      if (!calls.length) box.append(el("div", { className: "sub", textContent: "no calls yet — run one from the Live view" }));
-    } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+    const byUser = grp.value === "users";
+    sel.hidden = byUser; usr.hidden = byUser;
+    try { await (byUser ? loadUsers() : loadCalls()); }
+    catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
   }
-  sel.onchange = load;
+  grp.onchange = load; sel.onchange = load;
+  usr.onchange = load;
   load();
 }
 
@@ -317,7 +351,7 @@ async function callDetailView(sid) {
   const box = el("div", { className: "card" }); box.textContent = "loading…"; m.append(box);
   try {
     const c = await api(`/calls/${encodeURIComponent(sid)}`);
-    box.innerHTML = `<div class="row" style="gap:12px"><span class="pill st-${c.peak_state}">${c.peak_state}</span><span class="mono">peak ${c.peak_score}</span><span class="sub" style="margin:0">${c.live ? "live now" : fmtDur(c.duration_s)} · ${(c.scores || []).length} decisions${c.has_case ? " · " : ""}</span>${c.has_case ? `<a href="#/cases/${encodeURIComponent(sid)}" style="font-size:12px">open case →</a>` : ""}</div>`;
+    box.innerHTML = `<div class="row" style="gap:12px;flex-wrap:wrap"><span class="pill st-${c.peak_state}">${c.peak_state}</span><span class="mono">peak ${c.peak_score}</span>${c.user_ref ? `<span class="mono" style="color:var(--t2)">${esc(c.user_label || c.user_ref)}</span>` : ""}<span class="sub" style="margin:0">${c.live ? "live now" : fmtDur(c.duration_s)} · ${(c.scores || []).length} decisions</span>${c.has_case ? `<a href="#/cases/${encodeURIComponent(sid)}" style="font-size:12px">open case →</a>` : ""}</div>`;
     box.append(scoreChart(c.scores || []));
     const tx = el("div", { style: "font-family:var(--mono);font-size:12px;margin-top:16px;line-height:1.7" });
     for (const [role, text, t] of c.transcript || []) tx.innerHTML += `<div><span style="color:var(--t2)">${role} t${t}</span> <span style="color:${role === "CALLER" ? "var(--caller)" : role === "CALLEE" ? "var(--callee)" : "var(--t2)"}">${esc(text)}</span></div>`;

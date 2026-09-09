@@ -13,7 +13,7 @@ from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any, TypeVar
 
-from packages.calls.ledger import CallRecord, ScorePoint
+from packages.calls.ledger import CallRecord, ScorePoint, UserCallSummary
 from packages.contracts.risk import State
 from packages.db.loop import LoopThread
 
@@ -78,20 +78,40 @@ class PgCallLedger:
         *,
         tenant: str,
         api_key_id: str | None,
+        user_ref: str | None = None,
+        user_label: str | None = None,
         started_at: float | None = None,
     ) -> None:
-        self._run(self._open(session_id, tenant, api_key_id, started_at or time.time()))
-
-    async def _open(
-        self, session_id: str, tenant: str, api_key_id: str | None, started_at: float
-    ) -> None:
-        async with self._pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO call_ledger (session_id, tenant, api_key_id, started_at) "
-                "VALUES ($1, $2, $3, $4) ON CONFLICT (session_id) DO NOTHING",
+        self._run(
+            self._open(
                 session_id,
                 tenant,
                 api_key_id,
+                user_ref or None,
+                user_label or None,
+                started_at or time.time(),
+            )
+        )
+
+    async def _open(
+        self,
+        session_id: str,
+        tenant: str,
+        api_key_id: str | None,
+        user_ref: str | None,
+        user_label: str | None,
+        started_at: float,
+    ) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO call_ledger "
+                "(session_id, tenant, api_key_id, user_ref, user_label, started_at) "
+                "VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (session_id) DO NOTHING",
+                session_id,
+                tenant,
+                api_key_id,
+                user_ref,
+                user_label,
                 started_at,
             )
 
@@ -173,6 +193,7 @@ class PgCallLedger:
         self,
         tenant: str,
         api_key_id: str | None,
+        user_ref: str | None,
         since: float | None,
         until: float | None,
         min_state: State | None,
@@ -183,6 +204,9 @@ class PgCallLedger:
         if api_key_id is not None:
             params.append(api_key_id)
             clauses.append(f"api_key_id = ${len(params)}")
+        if user_ref is not None:
+            params.append(user_ref)
+            clauses.append(f"user_ref = ${len(params)}")
         if since is not None:
             params.append(since)
             clauses.append(f"started_at >= ${len(params)}")
@@ -203,6 +227,52 @@ class PgCallLedger:
             rows = await conn.fetch(sql, *params)
         return [_record(r, ()) for r in rows]
 
+    async def _user_summaries(self, tenant: str, since: float | None) -> list[UserCallSummary]:
+        params: list[Any] = [tenant]
+        where = "tenant = $1 AND user_ref IS NOT NULL"
+        if since is not None:
+            params.append(since)
+            where += " AND started_at >= $2"
+        sql = (
+            "SELECT user_ref, "
+            "max(user_label) AS user_label, "
+            "count(*) AS calls, "
+            "count(*) FILTER (WHERE peak_state IN ('ALERT','INTERVENE','RESOLVED')) AS alerts, "
+            "count(*) FILTER (WHERE peak_state = 'INTERVENE') AS interventions, "
+            "count(*) FILTER (WHERE peak_state = 'WATCH') AS watches, "
+            "max(started_at) AS last_at "
+            f"FROM call_ledger WHERE {where} GROUP BY user_ref ORDER BY last_at DESC"
+        )
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+        out: list[UserCallSummary] = []
+        for r in rows:
+            alerts, interventions, watches = r["alerts"], r["interventions"], r["watches"]
+            peak: State = (
+                "INTERVENE"
+                if interventions
+                else "ALERT"
+                if alerts
+                else "WATCH"
+                if watches
+                else "CALM"
+            )
+            out.append(
+                UserCallSummary(
+                    user_ref=r["user_ref"],
+                    user_label=r["user_label"],
+                    calls=int(r["calls"]),
+                    alerts=int(alerts),
+                    interventions=int(interventions),
+                    last_at=float(r["last_at"]),
+                    peak_state=peak,
+                )
+            )
+        return out
+
+    def user_summaries(self, tenant: str, *, since: float | None = None) -> list[UserCallSummary]:
+        return self._run(self._user_summaries(tenant, since))
+
     # defined last: the name `list` shadows the builtin in class scope, so
     # nothing after this may use `list[...]` in an annotation (see PgCaseStore)
     def list(  # noqa: A003 - matches the CallLedger protocol
@@ -210,12 +280,15 @@ class PgCallLedger:
         tenant: str,
         *,
         api_key_id: str | None = None,
+        user_ref: str | None = None,
         since: float | None = None,
         until: float | None = None,
         min_state: State | None = None,
         limit: int = 100,
     ) -> list[CallRecord]:
-        return self._run(self._list(tenant, api_key_id, since, until, min_state, max(0, limit)))
+        return self._run(
+            self._list(tenant, api_key_id, user_ref, since, until, min_state, max(0, limit))
+        )
 
 
 def _record(row: Any, scores: tuple[ScorePoint, ...]) -> CallRecord:
@@ -225,6 +298,8 @@ def _record(row: Any, scores: tuple[ScorePoint, ...]) -> CallRecord:
         api_key_id=row["api_key_id"],
         started_at=row["started_at"],
         ended_at=row["ended_at"],
+        user_ref=row["user_ref"],
+        user_label=row["user_label"],
         peak_state=row["peak_state"],
         peak_score=row["peak_score"],
         leg_count=row["leg_count"],

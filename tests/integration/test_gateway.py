@@ -65,6 +65,7 @@ def test_console_static_files_are_served() -> None:
     assert "/auth/login" in webapp and "/orgs/keys" in webapp  # wired to the API
     assert "mountConsole" in webapp  # live view reuses the engine
     assert '"#/calls"' in webapp and "/calls/" in webapp  # oversight: calls list + detail
+    assert "/calls/users" in webapp  # oversight: group-by-employee roll-up
     wk = client.get("/worklet.js")
     assert wk.status_code == 200
     assert "registerProcessor" in wk.text
