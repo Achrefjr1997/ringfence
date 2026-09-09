@@ -1,0 +1,80 @@
+# Ringfence alert rules (T-7.5).
+#
+# Every rule fires against a series the gateway actually exports
+# (packages/obs/metrics.py) or Prometheus' own `up`. Response for each is
+# in docs/RUNBOOKS.md ("Alerts").
+
+groups:
+  - name: ringfence-availability
+    rules:
+      - alert: GatewayDown
+        expr: up{job="ringfence-gateway"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gateway is not being scraped"
+          description: "Prometheus cannot reach gateway:8000/metrics for 2m — the gateway is down or the network is broken."
+
+      - alert: GatewayNoMetrics
+        expr: absent(ringfence_sessions_active)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gateway up but exporting no ringfence_ metrics"
+          description: "The scrape succeeds but ringfence_sessions_active is absent — the app is misbuilt or wedged."
+
+  - name: ringfence-asr
+    rules:
+      - alert: ASRBreakerOpen
+        expr: max by (provider) (ringfence_asr_breaker_state{state="open"}) == 1
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ASR circuit breaker open for {{ $labels.provider }}"
+          description: "The {{ $labels.provider }} breaker has been open for 3m — calls are running without transcription (rules-only). Check the provider status and the key."
+
+  - name: ringfence-admission
+    rules:
+      - alert: HighRejectionRate
+        expr: |
+          sum(rate(ringfence_rejected_total[5m]))
+            / clamp_min(sum(rate(ringfence_rejected_total[5m])) + rate(ringfence_admitted_total[5m]), 0.001)
+            > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Over half of admission attempts are being rejected"
+          description: "Rejections/(rejections+admits) > 50% for 10m. Break down by reason: {{ $labels }}."
+
+      - alert: AuthRejectionSpike
+        expr: rate(ringfence_rejected_total{reason="AUTH"}[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sustained AUTH rejections (>30/min)"
+          description: "A client is hammering /ws/capture with a bad or revoked key — possible brute force or a mis-provisioned integration."
+
+      - alert: BillingCapHitsRepeatedly
+        expr: rate(ringfence_rejected_total{reason="BILLING"}[15m]) > 0
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "A tenant keeps hitting its plan's hard cap"
+          description: "BILLING rejections for 15m straight — the tenant needs an upsell, or a plan is mis-assigned."
+
+  - name: ringfence-capacity
+    rules:
+      - alert: NearSessionCapacity
+        expr: ringfence_sessions_active / clamp_min(ringfence_session_capacity, 1) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Session capacity > 90%"
+          description: "{{ $value | humanizePercentage }} of the {{ with query \"ringfence_session_capacity\" }}{{ . | first | value }}{{ end }}-session capacity is in use. Scale out or raise the cap before CAPACITY rejections start."

@@ -114,3 +114,25 @@ certs — re-issuable, so lower priority).
 3. `up -d`. Run `python -m packages.db.migrate` (idempotent) in case the
    snapshot predates a schema addition.
 4. Verify `/health` and a `/cases` read.
+
+---
+
+## Alerts
+
+Prometheus (`infra/monitoring/`) scrapes `gateway:8000/metrics` and
+evaluates `alert-rules.yml`; Alertmanager POSTs firing/resolved alerts to
+`RF_ALERT_WEBHOOK_URL`. Both services are internal — reach the UIs over an
+SSH tunnel (`ssh -L 9090:localhost:9090 -L 9093:localhost:9093 box`).
+
+| Alert | Severity | Means | First response |
+|---|---|---|---|
+| **GatewayDown** | critical | scrape failing 2m | is the container up? `docker compose ps`, `logs gateway`. Caddy still serving? |
+| **GatewayNoMetrics** | critical | scrape OK, `ringfence_*` absent | app wedged or misbuilt — `logs gateway`, roll back `RF_IMAGE_TAG` |
+| **ASRBreakerOpen** | warning | a provider's breaker open 3m; calls run rules-only | check provider status page + the key (`RUNBOOKS` → rotate provider key); breaker half-opens itself after 30s once the provider recovers |
+| **HighRejectionRate** | warning | >50% of admission attempts rejected 10m | break down `ringfence_rejected_total` by `reason`; usually AUTH (bad integration) or CAPACITY |
+| **AuthRejectionSpike** | warning | sustained bad-key hits (>30/min) | identify the source IP from the JSON access log; revoke the key if it's a leak; the ingress rate limiter is already throttling it |
+| **BillingCapHitsRepeatedly** | info | a tenant keeps hitting its plan hard cap 15m | `GET /usage` for the tenant; upsell, or fix a mis-assigned plan (`POST /orgs/plan`) |
+| **NearSessionCapacity** | warning | >90% of `capacity` in use 5m | scale out (another node) or raise `capacity`; CAPACITY rejections are imminent |
+
+Silence noisy alerts from the Alertmanager UI while you work; don't edit
+the rules on the box.
