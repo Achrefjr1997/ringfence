@@ -75,3 +75,20 @@ CREATE TABLE IF NOT EXISTS call_comment_mentions (
     mentioned_user_id TEXT NOT NULL,
     PRIMARY KEY (comment_id, mentioned_user_id)
 );
+
+-- P5: append-only access audit -- who viewed / discussed / re-shared a
+-- call. No update or delete path (kept longer than the call itself), and
+-- NOT ON DELETE CASCADE: the trail outlives the ledger row.
+CREATE TABLE IF NOT EXISTS call_access_log (
+    id           TEXT             PRIMARY KEY,
+    session_id   TEXT             NOT NULL,   -- "" for a tenant-wide action (list)
+    tenant       TEXT             NOT NULL,
+    actor_id     TEXT             NOT NULL,
+    actor_email  TEXT             NOT NULL,
+    action       TEXT             NOT NULL,   -- list|view|play|download|comment|share|set_private
+    at           DOUBLE PRECISION NOT NULL,
+    ip           TEXT
+);
+
+CREATE INDEX IF NOT EXISTS call_access_log_session_idx ON call_access_log (session_id, at DESC);
+CREATE INDEX IF NOT EXISTS call_access_log_tenant_idx ON call_access_log (tenant, at DESC);

@@ -48,6 +48,7 @@ from packages.billing.plans import get_plans
 from packages.billing.provider import BillingProvider, NullBilling
 from packages.billing.service import BillingService
 from packages.calls.access import can_view_call, in_scope, report_refs
+from packages.calls.audit import Action, AuditEntry, AuditLog, InMemoryAuditLog
 from packages.calls.comments import (
     Comment,
     CommentError,
@@ -262,6 +263,7 @@ def _serialise_comment(c: Comment) -> dict[str, object]:
 
 _CASE_ROLES = frozenset({"admin", "operator", "guardian"})
 _STATE_NAMES = frozenset({"CALM", "WATCH", "ALERT", "INTERVENE", "RESOLVED"})
+_AUDIT_ACTIONS = frozenset({"list", "view", "play", "download", "comment", "share", "set_private"})
 
 
 def _default_asr() -> ASRProvider:
@@ -289,6 +291,7 @@ def create_app(
     billing_store: BillingStore | None = None,
     call_ledger: CallLedger | None = None,
     comment_store: CommentStore | None = None,
+    audit_log: AuditLog | None = None,
     billing_provider: BillingProvider | None = None,
     asr: ASRProvider | None = None,
     guardian_dispatcher: GuardianDispatcher | None = None,
@@ -361,6 +364,17 @@ def create_app(
         on_shutdown.append(pg_comments.close_pool)
     else:
         the_comments_store = InMemoryCommentStore()
+
+    if audit_log is not None:
+        the_audit: AuditLog = audit_log
+    elif _dsn:
+        from packages.calls.pg_audit import PgAuditLog
+
+        pg_audit = PgAuditLog(_dsn)
+        the_audit = pg_audit
+        on_shutdown.append(pg_audit.close_pool)
+    else:
+        the_audit = InMemoryAuditLog()
 
     the_secret = session_secret or get_settings().session_secret
     if not the_secret:
@@ -622,6 +636,21 @@ def create_app(
             rec_private=rec.private,
         )
 
+    def _audit(
+        request: Request, session_id: str, tenant: str, user: User | None, action: Action
+    ) -> None:
+        uid, email, _adm = _actor(user)
+        client = request.client
+        with contextlib.suppress(Exception):
+            the_audit.record(
+                session_id=session_id,
+                tenant=tenant,
+                actor_id=uid,
+                actor_email=email,
+                action=action,
+                ip=client.host if client else None,
+            )
+
     async def list_calls(request: Request) -> JSONResponse:
         user, err = case_access(request)
         if err is not None:
@@ -661,6 +690,7 @@ def create_app(
                 team_refs=team,
             )
         ]
+        _audit(request, "", tenant, user, "list")
         return JSONResponse([_serialise_call(r) for r in out])
 
     async def list_call_users(request: Request) -> JSONResponse:
@@ -705,6 +735,7 @@ def create_app(
         v = _viewer(user, rec.tenant)
         if not (_can_see(rec, v) or _mentioned_on(rec.session_id, v[0])):
             return JSONResponse({"error": "no such call"}, status_code=404)
+        _audit(request, rec.session_id, rec.tenant, user, "view")
         body = _serialise_call(rec, with_scores=True)
         body["shared_with"] = the_ledger.shares(rec.session_id)
         body["can_manage"] = v[1] or (rec.user_ref is not None and rec.user_ref == v[2])
@@ -737,6 +768,7 @@ def create_app(
             return rec
         private = bool((await read_json_body(request)).get("private", True))
         the_ledger.set_private(rec.session_id, private)
+        _audit(request, rec.session_id, rec.tenant, user, "set_private")
         got = the_ledger.get(rec.session_id)
         return JSONResponse(_serialise_call(got) if got else {"private": private})
 
@@ -753,6 +785,7 @@ def create_app(
             return JSONResponse({"error": "no such user in this org"}, status_code=400)
         by, _adm, _uref, _team = _viewer(user, rec.tenant)
         the_ledger.share(rec.session_id, user_id=target.id, by=by)
+        _audit(request, rec.session_id, rec.tenant, user, "share")
         return JSONResponse({"shared_with": the_ledger.shares(rec.session_id)})
 
     async def unshare_call(request: Request) -> JSONResponse:
@@ -763,7 +796,55 @@ def create_app(
         if isinstance(rec, JSONResponse):
             return rec
         the_ledger.unshare(rec.session_id, request.path_params["user_id"])
+        _audit(request, rec.session_id, rec.tenant, user, "share")
         return JSONResponse({"shared_with": the_ledger.shares(rec.session_id)})
+
+    def _serialise_audit(e: AuditEntry) -> dict[str, object]:
+        return {
+            "session_id": e.session_id or None,
+            "actor_email": e.actor_email,
+            "action": e.action,
+            "at": e.at,
+            "ip": e.ip,
+        }
+
+    async def list_call_access(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        if user is not None and user.role != "admin":
+            return JSONResponse({"error": "admin role required"}, status_code=403)
+        rec = the_ledger.get(request.path_params["session_id"])
+        tenant = _calls_tenant(request, user)
+        if rec is None or (tenant is not None and rec.tenant != tenant):
+            return JSONResponse({"error": "no such call"}, status_code=404)
+        return JSONResponse([_serialise_audit(e) for e in the_audit.for_call(rec.session_id)])
+
+    async def list_audit(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        if user is not None and user.role != "admin":
+            return JSONResponse({"error": "admin role required"}, status_code=403)
+        tenant = _calls_tenant(request, user)
+        if not tenant:
+            return JSONResponse({"error": "tenant unresolved"}, status_code=400)
+        q = request.query_params
+        act = q.get("action") or None
+        if act is not None and act not in _AUDIT_ACTIONS:
+            return JSONResponse({"error": "bad action"}, status_code=400)
+        try:
+            rows = the_audit.query(
+                tenant,
+                actor_id=q.get("actor") or None,
+                action=cast(Action, act) if act else None,
+                since=float(q["from"]) if q.get("from") else None,
+                until=float(q["to"]) if q.get("to") else None,
+                limit=min(1000, int(q.get("limit", "200"))),
+            )
+        except ValueError:
+            return JSONResponse({"error": "bad from/to/limit"}, status_code=400)
+        return JSONResponse([_serialise_audit(e) for e in rows])
 
     # -- threaded review comments (P3) ------------------------------
 
@@ -828,6 +909,7 @@ def create_app(
             )
         except (CommentError, ValueError, TypeError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+        _audit(request, rec.session_id, rec.tenant, user, "comment")
         return JSONResponse(_serialise_comment(c), status_code=201)
 
     async def edit_comment(request: Request) -> JSONResponse:
@@ -1044,6 +1126,8 @@ def create_app(
         Route("/calls/{session_id}", set_call_private, methods=["PATCH"]),
         Route("/calls/{session_id}/share", share_call, methods=["POST"]),
         Route("/calls/{session_id}/share/{user_id}", unshare_call, methods=["DELETE"]),
+        Route("/calls/{session_id}/access-log", list_call_access),
+        Route("/audit", list_audit),
         Route("/calls/{session_id}/comments", list_comments),
         Route("/calls/{session_id}/comments", add_comment, methods=["POST"]),
         Route("/calls/{session_id}/comments/{comment_id}", edit_comment, methods=["PATCH"]),
@@ -1103,6 +1187,7 @@ def create_app(
     app.state.cases = the_cases
     app.state.call_ledger = the_ledger
     app.state.comment_store = the_comments_store
+    app.state.audit_log = the_audit
     app.state.asr_router = the_router
     app.state.guardian = guardian
     return app

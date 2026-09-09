@@ -14,7 +14,7 @@ comparable products do it (see *Prior art* at the end).
 | **2** | Per-employee attribution + "by employee" roll-up | — | **shipped** (`feat/oversight-p2-users`) |
 | **3** | Threaded review (timestamped comments, @mention, visibility) | — | **shipped** (`feat/oversight-p3-comments`) |
 | **4** | RBAC hierarchy (own → team → org) + private calls + shares | — | **shipped** (`feat/oversight-p4-rbac`) |
-| **5** | Access audit log (who viewed / played / exported which call) | — | planned — **precedes 7** |
+| **5** | Access audit log (who viewed / played / exported which call) | — | **shipped** (`feat/oversight-p5-audit`) |
 | **6** | Transcript retained for *every* call, not just ALERT+ cases | `RF_RETAIN_TRANSCRIPTS` (invariant #5) | planned |
 | **7** | Full-conversation audio: capture, storage, playback, retention | **T-7.0 legal basis + DPA** | planned |
 | **8** | Live wall (supervisor sees every active call) | — | planned |
@@ -154,23 +154,28 @@ socket.
   `test_calls_gateway.py` covers private-hide/share/unshare, `scope=mine`
   / `team`, owner-or-admin-only management, and the `/orgs/users` fields.
 
-## Phase 5 — access audit log
+## Phase 5 — access audit log *(shipped)*
 
-**Goal:** an immutable record of who looked at what. Must land **before
-Phase 7**.
+**Goal:** an immutable record of who looked at what. A hard prerequisite
+for Phase 7.
 
-* **`call_access_log`**: `id`, `session_id`, `tenant`, `actor_user_id`,
-  `action` (`list` | `view` | `play` | `download` | `comment` |
-  `share` | `set_private`), `at`, `ip`, `user_agent`. Append-only; no
-  update/delete path.
-* Written by `/calls`, `/calls/{sid}`, every comment/share/private change,
-  and (Phase 7) every audio `play`/`download`.
-* **Endpoints:** `GET /calls/{sid}/access-log` (admin), `GET /audit?from=
-  &to=&actor=&action=` (admin, tenant-wide).
-* **Retention:** kept longer than call data (default 2y, configurable) —
-  compliance norm.
-* **Tests:** every read/mutation writes exactly one row; log is not
-  itself listable by non-admins; no delete route exists.
+* **`packages/calls/audit.py`** — `AuditLog` sync Protocol
+  (`InMemoryAuditLog` + `PgAuditLog`). **`call_access_log`**: `id`,
+  `session_id` (`""` for a tenant-wide `list`), `tenant`, `actor_id` /
+  `actor_email`, `action` (`list` | `view` | `play` | `download` |
+  `comment` | `share` | `set_private`), `at`, `ip`. **Append-only** — the
+  Protocol has no update or delete method, and the table has **no FK to
+  `call_ledger`**, so the trail outlives the call.
+* Written best-effort (never breaks the request) by `list_calls`,
+  `get_call`, `add_comment`, `share_call` / `unshare_call`,
+  `set_call_private`. Audio `play` / `download` join in Phase 7.
+* **Endpoints** (admin only, 403 for others): `GET /calls/{sid}/access-log`
+  and `GET /audit?actor=&action=&from=&to=&limit=` (tenant-wide).
+* **Console:** an **Access log** panel on the call detail for admins.
+* **Deferred to Phase 9:** a retention sweep (kept longer than call data).
+* **Tests:** `test_call_audit.py` (record / for_call / query);
+  `test_calls_gateway.py` — every read + mutation writes a row, admin-only,
+  no delete route, `list` carries no session.
 
 ## Phase 6 — transcript for every call
 

@@ -397,7 +397,23 @@ async function callDetailView(sid) {
     box.append(tx);
     box.append(el("a", { href: "#/calls", textContent: "← all calls", style: "display:inline-block;margin-top:16px;font-size:13px" }));
     m.append(commentsPanel(sid));
+    if (store.role === "admin") m.append(accessLogPanel(sid));
   } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+function accessLogPanel(sid) {
+  const p = el("div", { className: "card" }); p.style.marginTop = "16px";
+  p.innerHTML = `<div class="lbl" style="margin-bottom:10px">Access log</div><div id="alog" class="sub">loading…</div>`;
+  const box = p.querySelector("#alog");
+  api(`/calls/${encodeURIComponent(sid)}/access-log`).then((rows) => {
+    if (!rows.length) { box.textContent = "no access recorded yet"; return; }
+    box.innerHTML = "";
+    for (const r of rows) {
+      box.append(el("div", { className: "mono", style: "font-size:12px;color:var(--t2);margin:2px 0",
+        textContent: `${new Date(r.at * 1000).toLocaleString()}  ${r.action.padEnd(11)} ${r.actor_email}${r.ip ? "  " + r.ip : ""}` }));
+    }
+  }).catch((e) => { box.innerHTML = `<span class="err">${esc(e.message)}</span>`; });
+  return p;
 }
 
 function accessPanel(sid, c) {
