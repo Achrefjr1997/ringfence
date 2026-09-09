@@ -29,7 +29,7 @@ def ledger() -> Iterator[PgCallLedger]:
 
 async def _truncate(lg: PgCallLedger) -> None:
     async with lg._pool.acquire() as conn:
-        await conn.execute("TRUNCATE call_ledger, call_scores")
+        await conn.execute("TRUNCATE call_ledger, call_scores, call_comments CASCADE")
 
 
 def test_open_score_close_round_trip(ledger: PgCallLedger) -> None:

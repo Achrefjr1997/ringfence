@@ -12,7 +12,7 @@ comparable products do it (see *Prior art* at the end).
 |---|---|---|---|
 | **1** | Call ledger + escalation graph | — | **shipped** (`feat/call-oversight`) |
 | **2** | Per-employee attribution + "by employee" roll-up | — | **shipped** (`feat/oversight-p2-users`) |
-| **3** | Threaded review (timestamped comments, @mention, visibility) | — | planned |
+| **3** | Threaded review (timestamped comments, @mention, visibility) | — | **shipped** (`feat/oversight-p3-comments`) |
 | **4** | RBAC hierarchy (own → team → org) + private calls + shares | — | planned |
 | **5** | Access audit log (who viewed / played / exported which call) | — | planned — **precedes 7** |
 | **6** | Transcript retained for *every* call, not just ALERT+ cases | `RF_RETAIN_TRANSCRIPTS` (invariant #5) | planned |
@@ -91,26 +91,33 @@ socket.
   (needs identity accounts linked to `user_ref`). Until then `/calls` is
   admin/operator only, as in Phase 1.
 
-## Phase 3 — threaded review
+## Phase 3 — threaded review *(shipped)*
 
 **Goal:** discuss a call at a specific moment, like Gong's Comments tab.
 
-* **`call_comments`**: `id`, `session_id`, `tenant`, `t_seconds` (NULL =
-  general), `author_user_id`, `body`, `visibility` (`org` | `private` |
-  `mentions`), `parent_id` (NULL = top-level), `created_at`, `edited_at`,
-  `resolved_at`.
-* **`call_comment_mentions`**: `(comment_id, mentioned_user_id)`. A
-  mention grants that user read access to the call (Gong behavior).
-* **Endpoints:** `GET /calls/{sid}/comments`, `POST` (body + `t` +
-  `visibility` + `parent_id`), `PATCH`/`DELETE /calls/{sid}/comments/{id}`
-  (author or admin), `POST /calls/{sid}/comments/{id}/resolve`.
-* **Read rule:** you see a comment if you can see the call (Phase 4) AND
-  (`visibility=org` OR you're the author OR you're mentioned).
-* **Console:** a comment rail on the call detail; clicking a comment moves
-  the score-chart playhead to `t_seconds`; inline reply; visibility
-  selector; `@` autocomplete over the tenant's known `user_ref`s.
-* **Tests:** visibility matrix; mention-grants-access; resolve; edit/delete
-  authz; comment on a call you can't see → 404.
+* **`call_comments`**: `id`, `session_id`, `tenant`, `author_id` /
+  `author_email`, `body`, `visibility` (`org` | `private` | `mentions`),
+  `t_seconds` (NULL = general), `parent_id` (NULL = top-level),
+  `created_at`, `edited_at`, `resolved_at` / `resolved_by`. Cascades with
+  its call and with its parent.
+* **`call_comment_mentions`**: `(comment_id, mentioned_user_id)` — mention
+  emails are resolved server-side to same-org identity users. The
+  access-grant this implies is inert until Phase 4 (every reviewer already
+  sees every call).
+* **`CommentStore`** sync Protocol — `InMemoryCommentStore` /
+  `PgCommentStore`; tables live in `packages/calls/schema.sql`.
+* **Endpoints** (`case_access`; write not allowed for `guardian`):
+  `GET /calls/{sid}/comments`, `POST` (`body`, `t_seconds`, `visibility`,
+  `parent_id`, `mentions[]`), `PATCH`/`DELETE
+  /calls/{sid}/comments/{id}` (author or admin),
+  `POST /calls/{sid}/comments/{id}/resolve` `{resolved}`.
+* **Read rule:** `visibility=org` OR you're the author OR you're
+  mentioned; admin (and `dev_mode`) see all.
+* **Console:** a **Review thread** panel on the call detail — threaded
+  replies, an `@Ns` time chip, visibility selector, comma-separated
+  mention emails, resolve/reopen, edit/delete for the author or an admin.
+* **Deferred:** `@` autocomplete and moving the score-chart playhead to a
+  comment's `t_seconds` (needs the transcript/audio timeline from P6/P7).
 
 ## Phase 4 — RBAC hierarchy + private calls
 

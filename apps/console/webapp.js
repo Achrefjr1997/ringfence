@@ -358,7 +358,73 @@ async function callDetailView(sid) {
     if (!(c.transcript || []).length) tx.innerHTML = `<span class="sub">transcript not retained (needs RF_RETAIN_TRANSCRIPTS, and only ALERT+ calls open a case)</span>`;
     box.append(tx);
     box.append(el("a", { href: "#/calls", textContent: "← all calls", style: "display:inline-block;margin-top:16px;font-size:13px" }));
+    m.append(commentsPanel(sid));
   } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+// ---------- threaded review comments ----------
+function fmtWhen(ts) { return ts ? new Date(ts * 1000).toLocaleString() : ""; }
+
+function commentsPanel(sid) {
+  const panel = el("div", { className: "card" }); panel.style.marginTop = "16px";
+  panel.innerHTML = `<div class="lbl" style="margin-bottom:10px">Review thread</div><div id="cthread">loading…</div>`;
+  const thread = panel.querySelector("#cthread");
+
+  const form = el("div", { style: "margin-top:14px;border-top:1px solid var(--line, #ffffff14);padding-top:12px" });
+  form.innerHTML = `
+    <textarea class="field" id="cbody" rows="2" placeholder="comment on this call…"></textarea>
+    <div class="row" style="gap:8px;margin-top:8px;flex-wrap:wrap">
+      <input class="field" id="ct" style="max-width:90px" placeholder="@ sec">
+      <select class="field" id="cvis" style="max-width:150px"><option value="org">everyone</option><option value="mentions">mentions only</option><option value="private">private</option></select>
+      <input class="field" id="cmnt" style="max-width:220px" placeholder="mention emails, comma">
+      <button class="btn" id="cadd">Comment</button>
+    </div>
+    <div class="err" id="cerr" style="margin-top:6px"></div>`;
+  panel.append(form);
+
+  function node(c, replyTo) {
+    const d = el("div", { style: `margin:10px 0;${replyTo ? "margin-left:22px;" : ""}` });
+    const tchip = c.t_seconds != null ? `<span class="pill st-WATCH" style="cursor:default">@${Math.round(c.t_seconds)}s</span>` : "";
+    const done = c.resolved_at ? `<span class="ok" style="font-size:11px">resolved</span>` : "";
+    d.innerHTML = `<div class="row" style="gap:8px;flex-wrap:wrap"><span class="mono" style="font-size:12px">${esc(c.author_email)}</span><span class="sub" style="margin:0">${fmtWhen(c.created_at)}${c.edited_at ? " · edited" : ""}</span>${tchip}${done}<span class="sub" style="margin:0">${c.visibility === "org" ? "" : c.visibility}</span></div>
+      <div style="font-size:13px;margin:4px 0;white-space:pre-wrap">${esc(c.body)}</div>
+      <div class="row" style="gap:10px;font-size:11px"><a href="#" data-a="reply">reply</a><a href="#" data-a="resolve">${c.resolved_at ? "reopen" : "resolve"}</a><a href="#" data-a="edit">edit</a><a href="#" data-a="del" style="color:var(--intervene)">delete</a></div>`;
+    d.querySelector('[data-a="reply"]').onclick = (e) => { e.preventDefault(); form.querySelector("#cbody").focus(); form.dataset.parent = c.id; form.querySelector("#cadd").textContent = "Reply"; };
+    d.querySelector('[data-a="resolve"]').onclick = async (e) => { e.preventDefault(); await api(`/calls/${encodeURIComponent(sid)}/comments/${c.id}/resolve`, { method: "POST", body: { resolved: !c.resolved_at } }); load(); };
+    d.querySelector('[data-a="edit"]').onclick = async (e) => { e.preventDefault(); const v = prompt("edit comment", c.body); if (v != null) { await api(`/calls/${encodeURIComponent(sid)}/comments/${c.id}`, { method: "PATCH", body: { body: v } }); load(); } };
+    d.querySelector('[data-a="del"]').onclick = async (e) => { e.preventDefault(); if (confirm("delete this comment?")) { await api(`/calls/${encodeURIComponent(sid)}/comments/${c.id}`, { method: "DELETE" }); load(); } };
+    return d;
+  }
+
+  async function load() {
+    try {
+      const all = await api(`/calls/${encodeURIComponent(sid)}/comments`);
+      thread.innerHTML = "";
+      const tops = all.filter((c) => !c.parent_id);
+      const kids = (id) => all.filter((c) => c.parent_id === id);
+      if (!tops.length) thread.innerHTML = `<span class="sub">no comments yet</span>`;
+      for (const c of tops) { thread.append(node(c, false)); for (const k of kids(c.id)) thread.append(node(k, true)); }
+    } catch (e) { thread.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  }
+
+  form.querySelector("#cadd").onclick = async () => {
+    const body = form.querySelector("#cbody").value.trim();
+    if (!body) return;
+    const t = form.querySelector("#ct").value.trim();
+    const mnt = form.querySelector("#cmnt").value.split(",").map((s) => s.trim()).filter(Boolean);
+    try {
+      await api(`/calls/${encodeURIComponent(sid)}/comments`, { method: "POST", body: {
+        body, visibility: form.querySelector("#cvis").value,
+        t_seconds: t === "" ? null : Number(t),
+        parent_id: form.dataset.parent || null, mentions: mnt,
+      } });
+      form.querySelector("#cbody").value = ""; form.querySelector("#cmnt").value = ""; form.querySelector("#ct").value = "";
+      delete form.dataset.parent; form.querySelector("#cadd").textContent = "Comment";
+      form.querySelector("#cerr").textContent = ""; load();
+    } catch (e) { form.querySelector("#cerr").textContent = e.message; }
+  };
+  load();
+  return panel;
 }
 
 // ---------- live ----------
