@@ -214,6 +214,39 @@ class PgCallLedger:
             )
         return [r["shared_with_user"] for r in rows]
 
+    def set_audio(self, session_id: str, *, key: str, size: int, retain_until: float) -> None:
+        self._run(
+            self._exec(
+                "UPDATE call_ledger SET audio_key = $2, audio_bytes = $3, "
+                "audio_retain_until = $4 WHERE session_id = $1",
+                session_id,
+                key,
+                size,
+                retain_until,
+            )
+        )
+
+    def clear_audio(self, session_id: str) -> None:
+        self._run(
+            self._exec(
+                "UPDATE call_ledger SET audio_key = NULL, audio_bytes = NULL, "
+                "audio_retain_until = NULL WHERE session_id = $1",
+                session_id,
+            )
+        )
+
+    def expired_audio(self, now: float) -> list[tuple[str, str]]:
+        return self._run(self._expired_audio(now))
+
+    async def _expired_audio(self, now: float) -> list[tuple[str, str]]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT session_id, audio_key FROM call_ledger "
+                "WHERE audio_key IS NOT NULL AND audio_retain_until <= $1",
+                now,
+            )
+        return [(r["session_id"], r["audio_key"]) for r in rows]
+
     # -- reads ----------------------------------------------------
 
     def get(self, session_id: str) -> CallRecord | None:
@@ -349,5 +382,8 @@ def _record(row: Any, scores: tuple[ScorePoint, ...]) -> CallRecord:
         leg_count=row["leg_count"],
         turn_count=row["turn_count"],
         private=row["private"],
+        audio_key=row["audio_key"],
+        audio_bytes=row["audio_bytes"],
+        audio_retain_until=row["audio_retain_until"],
         scores=scores,
     )

@@ -54,6 +54,13 @@ services:
       RF_JUDGE_TIMEOUT_S: ${RF_JUDGE_TIMEOUT_S:-2.5}  # Ollama Cloud p99 ~2s; 0.8s default times out
       RF_RETAIN_TRANSCRIPTS: ${RF_RETAIN_TRANSCRIPTS:-false}
       RF_DATA_ENCRYPTION_KEY: ${RF_DATA_ENCRYPTION_KEY:-}
+      # P7 call-audio recording -- OFF unless you have a legal basis + DPA
+      # (docs/LEGAL_AUDIO.md); a tenant also opts in via config/tenants.yaml
+      RF_RETAIN_AUDIO: ${RF_RETAIN_AUDIO:-false}
+      RF_AUDIO_RETENTION_DAYS: ${RF_AUDIO_RETENTION_DAYS:-7}
+      RF_AUDIO_STORE_ROOT: /var/lib/ringfence/audio
+    volumes:
+      - call_audio:/var/lib/ringfence/audio
 
   nats:
     image: nats:2-alpine
@@ -136,3 +143,4 @@ volumes:
   prom_data:
   am_data:
   grafana_data:
+  call_audio:  # P7 recordings (empty unless RF_RETAIN_AUDIO=true)

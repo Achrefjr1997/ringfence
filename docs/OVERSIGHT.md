@@ -16,17 +16,18 @@ comparable products do it (see *Prior art* at the end).
 | **4** | RBAC hierarchy (own → team → org) + private calls + shares | — | **shipped** (`feat/oversight-p4-rbac`) |
 | **5** | Access audit log (who viewed / played / exported which call) | — | **shipped** (`feat/oversight-p5-audit`) |
 | **6** | Transcript retained for *every* call, not just ALERT+ cases | `RF_RETAIN_TRANSCRIPTS` (invariant #5) | **shipped** (`feat/oversight-p6-transcript`) |
-| **7** | Full-conversation audio: capture, storage, playback, retention | **T-7.0 legal basis + DPA** — **held** | planned |
+| **7** | Full-conversation audio: capture, storage, playback, retention | **T-7.0 legal basis + DPA** — **off by default** | **shipped** (`feat/oversight-p7-audio`) |
 | **8** | Live wall (supervisor sees every active call) | — | **shipped** (`feat/oversight-p8-livewall`) |
 | **9** | Employee timeline | — | **shipped** (`feat/oversight-p9-timeline`) |
 
-Only **Phase 7** is legally gated and is **on hold** until the legal basis
-(T-7.0 + DPA) is in hand; when P7 lands, its retention TTL sweep covers
-every data class (ledger / transcript / audit / audio), which is why the
-standalone "per-tenant retention controls" once planned for P9 fold into
-P7 rather than shipping without the sweep that gives them teeth. P7's
-audio format is **Opus**, storage is **local filesystem** (a mounted
-volume) — decided 2026-09-09.
+**All nine phases are shipped.** Phase 7 is code-complete but ships
+**disabled** — recording needs `RF_RETAIN_AUDIO=true` (global) *and* a
+per-tenant `retain_audio: true`, and neither should be set in production
+until counsel has signed off `docs/LEGAL_AUDIO.md` (T-7.0 + DPA). Format
+is **Ogg/Opus** (via the existing `soundfile` dep — no new dependency),
+storage is **local filesystem** (a mounted volume), and the hourly TTL
+sweep covers the recording; the once-planned standalone retention
+controls for other data classes are still deferred.
 
 ---
 
@@ -200,44 +201,44 @@ for Phase 7.
 * **Tests:** `test_call_transcripts.py`; `test_transcript_recorder.py`
   (flag on → flushed, flag off → nothing, marked `invariant`);
   `test_calls_gateway.py` — a non-Case call still serves its transcript.
-## Phase 7 — full-conversation audio  *(T-7.0 legal gate)*
+## Phase 7 — full-conversation audio  *(shipped, disabled by default — T-7.0 legal gate)*
 
 **Goal:** play back the actual call for verification.
 
-RingFence is observer-only and stores no audio today. Recording a
-two-party call is regulated (two-party-consent jurisdictions, GDPR,
-wiretap); RingFence retaining it is a processing purpose separate from
-the customer's own call flow and needs a legal basis + a DPA. Ships
-opt-in and off by default.
+RingFence is observer-only and stores no audio unless **both** switches
+are on: `RF_RETAIN_AUDIO=true` (global) and `retain_audio: true` for the
+tenant in `config/tenants.yaml`. Do not set either in production before
+`docs/LEGAL_AUDIO.md` is signed off.
 
-* **`packages/storage/`** — `ObjectStore` Protocol; `LocalFsObjectStore`
-  (default, a mounted volume) + `S3ObjectStore` (MinIO / S3), swapped by
-  `RF_OBJECT_STORE=fs://… | s3://…`, same pattern as the other stores.
-* **Capture:** in `capture()`, when `RF_RETAIN_AUDIO=true` **and** the
-  tenant has `retain_audio: true` in `config/tenants.yaml`, tee each
-  leg's PCM to a per-session temp WAV; on close, mix → encode Opus → put
-  at `tenant/<yyyy-mm>/<session_id>.opus`; set `call_ledger.audio_key` +
-  `audio_retain_until`.
-* **Endpoint:** `GET /calls/{sid}/audio` — Range-capable stream,
-  access-checked (Phase 4), **audit-logged** (Phase 5). `?download=1` →
-  `Content-Disposition`.
-* **Retention:** an hourly sweep in the app lifespan deletes objects past
-  `audio_retain_until` and nulls `audio_key`.
-* **Compose:** `minio` service — internal in prod, `:9000/:9001`
-  published locally.
-* **Config:** `RF_RETAIN_AUDIO`, `RF_OBJECT_STORE`,
-  `RF_AUDIO_RETENTION_DAYS`; per-tenant `retain_audio`,
-  `audio_retention_days`.
-* **Console:** `<audio controls>` on the call detail sourced from the
-  endpoint; playhead synced to the score chart and transcript.
-* **Docs:** `docs/LEGAL_AUDIO.md` — the checklist counsel signs off
-  (consent basis per region, DPA, retention max, data-subject
-  access/erasure, sub-processor disclosure).
-* **Tests:** store round-trip (both impls); capture writes nothing when
-  the flag or the tenant opt-in is off; Range requests; access denied →
-  403 + audit row; retention sweep deletes and nulls the key; an
-  invariant test that no audio is persisted with `RF_RETAIN_AUDIO` unset.
-
+* **`packages/storage/objectstore.py`** — `ObjectStore` Protocol +
+  `LocalFsObjectStore(root)` (atomic `put`, `read_range` for HTTP Range,
+  rejects keys that escape the root). An S3 impl slots in behind it later.
+* **`packages/calls/audio.py`** — `mix_legs` (sum PCM16 legs, pad, clip),
+  `encode_opus` (Ogg/Opus via `soundfile` — already a dependency, no
+  libopus install), `opus_available()` for a fail-fast startup check.
+* **Capture:** when `live.retain_audio`, each frame's PCM is teed into a
+  per-leg buffer; on last-leg close the legs are mixed, encoded, `put` at
+  `tenant/YYYY-MM/<session>.opus`, and `call_ledger.audio_key` /
+  `audio_bytes` / `audio_retain_until` are set
+  (`RF_AUDIO_RETENTION_DAYS`, default 7). All best-effort — a failure
+  never breaks the call.
+* **`GET /calls/{sid}/audio`** — access-checked exactly like the call
+  detail (private stays private); Range → `206` + `Content-Range`;
+  `?download=1` → `Content-Disposition`. Accepts a login token in `?token=`
+  so a plain `<audio src>` works from the console. **Every play and
+  download writes a P5 audit row** (`play` / `download`, with the IP).
+* **Retention sweep:** an hourly lifespan task deletes objects past
+  `audio_retain_until` and nulls the columns.
+* **Console:** an `<audio controls>` + download link on the call detail
+  when `body.audio` is true.
+* **Infra:** `RF_RETAIN_AUDIO` / `RF_AUDIO_RETENTION_DAYS` /
+  `RF_AUDIO_STORE_ROOT` in `docker-compose.prod.yml` (off), a `call_audio`
+  volume, and `docs/LEGAL_AUDIO.md` (the counsel checklist).
+* **Tests:** object store (incl. traversal); mix + encode round-trip;
+  gateway — recording stored + streamable + Range + `?token=` + audited;
+  nothing stored when the tenant hasn't opted in; **invariant** — no
+  recording path when no store is configured; retention sweep drops
+  expired objects.
 ## Phase 8 — live wall *(shipped)*
 
 **Goal:** a supervisor sees every call happening right now.

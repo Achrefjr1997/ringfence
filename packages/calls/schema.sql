@@ -25,6 +25,11 @@ ALTER TABLE call_ledger ADD COLUMN IF NOT EXISTS user_ref TEXT;
 ALTER TABLE call_ledger ADD COLUMN IF NOT EXISTS user_label TEXT;
 -- P4: a private call is hidden from managers (owner + shares + admin only).
 ALTER TABLE call_ledger ADD COLUMN IF NOT EXISTS private BOOLEAN NOT NULL DEFAULT FALSE;
+-- P7: the stored recording (Ogg/Opus in the object store) -- only present
+-- when RF_RETAIN_AUDIO is on and the tenant opted in. Swept at retain_until.
+ALTER TABLE call_ledger ADD COLUMN IF NOT EXISTS audio_key TEXT;
+ALTER TABLE call_ledger ADD COLUMN IF NOT EXISTS audio_bytes BIGINT;
+ALTER TABLE call_ledger ADD COLUMN IF NOT EXISTS audio_retain_until DOUBLE PRECISION;
 
 CREATE INDEX IF NOT EXISTS call_ledger_user_started_idx
     ON call_ledger (tenant, user_ref, started_at DESC);

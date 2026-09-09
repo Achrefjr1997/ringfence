@@ -390,6 +390,11 @@ async function callDetailView(sid) {
     const c = await api(`/calls/${encodeURIComponent(sid)}`);
     box.innerHTML = `<div class="row" style="gap:12px;flex-wrap:wrap"><span class="pill st-${c.peak_state}">${c.peak_state}</span><span class="mono">peak ${c.peak_score}</span>${c.user_ref ? `<span class="mono" style="color:var(--t2)">${esc(c.user_label || c.user_ref)}</span>` : ""}${c.private ? `<span class="pill st-INTERVENE">🔒 private</span>` : ""}<span class="sub" style="margin:0">${c.live ? "live now" : fmtDur(c.duration_s)} · ${(c.scores || []).length} decisions</span>${c.has_case ? `<a href="#/cases/${encodeURIComponent(sid)}" style="font-size:12px">open case →</a>` : ""}</div>`;
     box.append(scoreChart(c.scores || []));
+    if (c.audio) {
+      const src = `/calls/${encodeURIComponent(sid)}/audio?token=${encodeURIComponent(store.token || "")}`;
+      const au = el("audio", { controls: true, src, style: "width:100%;max-width:680px;margin-top:12px;display:block" });
+      box.append(au, el("a", { href: src + "&download=1", textContent: "download recording", style: "font-size:12px" }));
+    }
     if (c.can_manage) box.append(accessPanel(sid, c));
     const tx = el("div", { style: "font-family:var(--mono);font-size:12px;margin-top:16px;line-height:1.7" });
     for (const [role, text, t] of c.transcript || []) tx.innerHTML += `<div><span style="color:var(--t2)">${role} t${t}</span> <span style="color:${role === "CALLER" ? "var(--caller)" : role === "CALLEE" ? "var(--callee)" : "var(--t2)"}">${esc(text)}</span></div>`;
