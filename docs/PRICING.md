@@ -67,6 +67,12 @@ re-check the table — this is flagged in `SAAS_ROADMAP.md` too.
   (wall-clock duration) and `calls` are recorded per tenant per billing
   month (`BillingStore`; in-memory by default, Postgres when
   `RF_DATABASE_URL` is set — `usage_counters` table, atomic `+=`).
+- **Per-key attribution** — when the session was admitted with an API key,
+  the same counters are also recorded against that key (`usage_key_counters`
+  table) so an admin can see which integration is spending minutes. This is
+  visibility only; billing still reads the tenant `usage_counters`. Sessions
+  admitted in dev mode (no key) contribute nothing here. `GET /orgs/keys`
+  returns `call_minutes` / `calls` for the current period per key.
 - **`GET /usage`** (admin) — current-period snapshot: minutes used vs
   included, projected overage cents, month total, `over_hard_cap`.
 - **`POST /orgs/plan`** `{plan}` (admin) — switch tier.

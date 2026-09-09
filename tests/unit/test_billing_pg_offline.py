@@ -8,7 +8,7 @@ from packages.db.migrate import _SCHEMAS
 
 def test_schema_is_idempotent_and_declares_both_tables() -> None:
     sql = schema_sql()
-    for table in ("org_billing", "usage_counters"):
+    for table in ("org_billing", "usage_counters", "usage_key_counters"):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
     assert sql.count("CREATE TABLE ") == sql.count("CREATE TABLE IF NOT EXISTS ")
     assert sql.count("CREATE INDEX ") == sql.count("CREATE INDEX IF NOT EXISTS ")

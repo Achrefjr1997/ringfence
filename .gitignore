@@ -4,6 +4,7 @@ __pycache__/
 .env
 .env.prod
 .env.staging
+.env.local-prod
 *.decrypted
 reports/
 corpus/audio/
@@ -12,3 +13,5 @@ corpus/audio/
 bin/
 cmd/gateway/bin/
 cmd/normalizer/bin/
+# local test asset (regenerate: python scripts/gen_demo_call.py)
+demo-scam-call.wav

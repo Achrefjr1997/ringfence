@@ -1,0 +1,16 @@
+# Grafana datasource provisioning (T-7.5).
+# The dashboard JSON references this datasource by its fixed uid, so the
+# stack comes up with graphs already wired -- no click-through setup.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: ringfence-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s

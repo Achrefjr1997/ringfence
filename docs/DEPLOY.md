@@ -28,6 +28,39 @@ Sizing: the production design scopes ~100 concurrent calls per node. Start
 with a VPS matched to that (e.g. a 4 vCPU / 8 GB Hetzner or Scaleway
 instance in the EU), not the 10k tier.
 
+## Run the whole stack locally first
+
+Before there is a server, run the exact production topology on your
+machine — same image, same `RF_*` surface, real Postgres, the
+circuit-breaking ASR router, the guardian dispatcher, Prometheus +
+Alertmanager + Grafana. Only three things differ (a `docker-compose.local-prod.yml`
+overlay): the gateway is **built** instead of pulled from GHCR, its port is
+also published on `:8000`, and Caddy serves `https://localhost` with its
+own internal CA (`RF_TLS=tls internal`) so no DNS or Let's Encrypt is
+involved.
+
+```bash
+cd infra/compose
+cp .env.local-prod.example .env.local-prod
+# fill RF_SESSION_SECRET (openssl rand -base64 48) and RF_ALERT_WEBHOOK_URL
+
+docker compose -f docker-compose.prod.yml -f docker-compose.local-prod.yml \
+  --env-file .env.local-prod up -d --build
+
+curl -k https://localhost/health
+curl -k -XPOST https://localhost/auth/signup -H content-type:application/json \
+  -d '{"org_name":"L","email":"a@l.test","password":"pw-12345678"}'
+# Grafana http://localhost:3000 (dashboard, no login)  ·  Prometheus http://localhost:9090  ·  Alertmanager http://localhost:9093
+
+docker compose -f docker-compose.prod.yml -f docker-compose.local-prod.yml \
+  --env-file .env.local-prod down            # add -v to wipe the volumes
+```
+
+The `migrate` one-shot applies the schema (the gateway also self-migrates);
+it waits for Postgres to report healthy. With `RF_ASR_PROVIDER=null` there
+is no transcription — set `assemblyai` + `ASSEMBLYAI_API_KEY` to exercise
+the real path, and `RF_DRY_RUN=false` to let guardian webhooks fire.
+
 ## One-time server setup
 
 1. Install Docker Engine + the compose plugin.

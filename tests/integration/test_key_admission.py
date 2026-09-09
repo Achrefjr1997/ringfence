@@ -48,6 +48,8 @@ def test_create_list_and_revoke_a_key() -> None:
     listed = c.get("/orgs/keys", headers=_auth(token)).json()
     assert [k["id"] for k in listed] == [key["id"]]
     assert "key" not in listed[0] and listed[0]["revoked"] is False
+    # per-key usage for the current period, zero until a session runs
+    assert listed[0]["call_minutes"] == 0.0 and listed[0]["calls"] == 0
 
     assert c.delete(f"/orgs/keys/{key['id']}", headers=_auth(token)).status_code == 204
     assert c.get("/orgs/keys", headers=_auth(token)).json()[0]["revoked"] is True

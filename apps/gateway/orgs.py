@@ -19,13 +19,14 @@ from starlette.routing import Route
 
 from apps.gateway.auth import authenticate, read_json_body
 from apps.gateway.purpose_tokens import bind_for, issue_purpose_token
+from packages.billing.meter import BillingStore
 from packages.identity.models import Role, User
 from packages.identity.store import DuplicateEmail, IdentityError, IdentityStore
 
 _INVITE_ROLES = ("operator", "guardian")
 
 
-def build_org_routes(store: IdentityStore, secret: str) -> list[Route]:
+def build_org_routes(store: IdentityStore, secret: str, *, billing: BillingStore) -> list[Route]:
     def _require_admin(request: Request) -> User | JSONResponse:
         user = authenticate(request, store, secret)
         if user is None:
@@ -56,8 +57,10 @@ def build_org_routes(store: IdentityStore, secret: str) -> list[Route]:
         user = _require_admin(request)
         if isinstance(user, JSONResponse):
             return user
-        return JSONResponse(
-            [
+        out = []
+        for k in store.list_api_keys(user.org_id):
+            u = billing.key_totals(user.org_id, k.id)
+            out.append(
                 {
                     "id": k.id,
                     "name": k.name,
@@ -65,10 +68,12 @@ def build_org_routes(store: IdentityStore, secret: str) -> list[Route]:
                     "created_at": k.created_at,
                     "last_used_at": k.last_used_at,
                     "revoked": k.revoked,
+                    "period": u.period,
+                    "call_minutes": round(u.call_minutes, 2),
+                    "calls": u.calls,
                 }
-                for k in store.list_api_keys(user.org_id)
-            ]
-        )
+            )
+        return JSONResponse(out)
 
     async def delete_key(request: Request) -> Response:
         user = _require_admin(request)
