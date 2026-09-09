@@ -52,6 +52,8 @@ class User(BaseModel):
     role: Role = "operator"
     verified: bool = False
     created_at: float = Field(default_factory=_now)
+    manager_id: str | None = None  # this user's manager, same org (call-oversight P4)
+    user_ref: str | None = None  # the employee id integrations pass on /ws/capture
 
     @field_validator("email")
     @classmethod

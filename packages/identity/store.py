@@ -42,6 +42,10 @@ class IdentityStore(Protocol):
 
     def set_verified(self, user_id: str) -> User: ...
 
+    def set_manager(self, user_id: str, manager_id: str | None) -> User: ...
+
+    def set_user_ref(self, user_id: str, user_ref: str | None) -> User: ...
+
     def issue_api_key(self, *, org_id: str, name: str) -> tuple[ApiKey, str]: ...
 
     def resolve_api_key(self, plaintext: str) -> ApiKey | None: ...
@@ -121,6 +125,26 @@ class InMemoryIdentityStore:
         if user is None:
             raise IdentityError(f"no such user {user_id}")
         user.verified = True
+        return user
+
+    def set_manager(self, user_id: str, manager_id: str | None) -> User:
+        user = self._users.get(user_id)
+        if user is None:
+            raise IdentityError(f"no such user {user_id}")
+        if manager_id is not None:
+            mgr = self._users.get(manager_id)
+            if mgr is None or mgr.org_id != user.org_id:
+                raise IdentityError("manager must be a user in the same org")
+            if manager_id == user_id:
+                raise IdentityError("a user cannot manage themselves")
+        user.manager_id = manager_id
+        return user
+
+    def set_user_ref(self, user_id: str, user_ref: str | None) -> User:
+        user = self._users.get(user_id)
+        if user is None:
+            raise IdentityError(f"no such user {user_id}")
+        user.user_ref = user_ref or None
         return user
 
     # -- api keys ---------------------------------------------------

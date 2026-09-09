@@ -53,6 +53,7 @@ class CallRecord:
     peak_score: float = 0.0
     leg_count: int = 0
     turn_count: int = 0
+    private: bool = False  # P4: hidden from managers (owner + shares + admin only)
     scores: tuple[ScorePoint, ...] = ()
 
     @property
@@ -97,6 +98,14 @@ class CallLedger(Protocol):
     ) -> None: ...
 
     def get(self, session_id: str) -> CallRecord | None: ...
+
+    def set_private(self, session_id: str, private: bool) -> None: ...
+
+    def share(self, session_id: str, *, user_id: str, by: str) -> None: ...
+
+    def unshare(self, session_id: str, user_id: str) -> None: ...
+
+    def shares(self, session_id: str) -> list[str]: ...
 
     def user_summaries(
         self, tenant: str, *, since: float | None = None
@@ -146,6 +155,7 @@ class InMemoryCallLedger:
     def __init__(self) -> None:
         self._calls: dict[str, CallRecord] = {}
         self._scores: dict[str, list[ScorePoint]] = {}
+        self._shares: dict[str, set[str]] = {}
 
     def open(
         self,
@@ -203,6 +213,21 @@ class InMemoryCallLedger:
         if cur is None:
             return None
         return replace(cur, scores=tuple(self._scores.get(session_id, ())))
+
+    def set_private(self, session_id: str, private: bool) -> None:
+        cur = self._calls.get(session_id)
+        if cur is not None:
+            self._calls[session_id] = replace(cur, private=private)
+
+    def share(self, session_id: str, *, user_id: str, by: str) -> None:
+        if session_id in self._calls:
+            self._shares.setdefault(session_id, set()).add(user_id)
+
+    def unshare(self, session_id: str, user_id: str) -> None:
+        self._shares.get(session_id, set()).discard(user_id)
+
+    def shares(self, session_id: str) -> list[str]:
+        return sorted(self._shares.get(session_id, set()))
 
     def user_summaries(self, tenant: str, *, since: float | None = None) -> list[UserCallSummary]:
         return _summarise(

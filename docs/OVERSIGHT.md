@@ -13,7 +13,7 @@ comparable products do it (see *Prior art* at the end).
 | **1** | Call ledger + escalation graph | — | **shipped** (`feat/call-oversight`) |
 | **2** | Per-employee attribution + "by employee" roll-up | — | **shipped** (`feat/oversight-p2-users`) |
 | **3** | Threaded review (timestamped comments, @mention, visibility) | — | **shipped** (`feat/oversight-p3-comments`) |
-| **4** | RBAC hierarchy (own → team → org) + private calls + shares | — | planned |
+| **4** | RBAC hierarchy (own → team → org) + private calls + shares | — | **shipped** (`feat/oversight-p4-rbac`) |
 | **5** | Access audit log (who viewed / played / exported which call) | — | planned — **precedes 7** |
 | **6** | Transcript retained for *every* call, not just ALERT+ cases | `RF_RETAIN_TRANSCRIPTS` (invariant #5) | planned |
 | **7** | Full-conversation audio: capture, storage, playback, retention | **T-7.0 legal basis + DPA** | planned |
@@ -119,31 +119,40 @@ socket.
 * **Deferred:** `@` autocomplete and moving the score-chart playhead to a
   comment's `t_seconds` (needs the transcript/audio timeline from P6/P7).
 
-## Phase 4 — RBAC hierarchy + private calls
+## Phase 4 — RBAC hierarchy + private calls *(shipped)*
 
 **Goal:** "own → team → org" visibility, matching Gong / Dialpad.
 
-* **`User.manager_id`** (nullable, same-org FK). A *team* is the
-  transitive closure under a manager. A `User.user_ref` column links an
-  identity account to the opaque ref integrations send in Phase 2 (set by
-  the admin, or self-claimed via an invite).
-* **Access rule** — a user may see call `c`:
-  `role == admin`
-  OR `c.user_ref == viewer.user_ref` (own)
-  OR `c.user_ref` is in the viewer's report tree (manager)
-  OR viewer is `@mentioned` on `c`
-  OR `c` was explicitly shared with the viewer.
-* **`call_ledger.private BOOL`** (default false): when true, managers are
-  excluded — only owner + mentions + explicit shares. **Admin always sees**
-  (Dialpad Company Admin). Marking private is the owner or an admin.
-* **`call_shares`**: `(session_id, shared_with_user_id, shared_by, at)`.
-* **Endpoints:** `POST /calls/{sid}/share {user_id}`, `PATCH /calls/{sid}
-  {private: bool}`. `/calls` gains `scope=mine|team|all` (default `mine`
-  for employees, `all` for admin).
-* **Console:** scope switcher on the Calls list; a share dialog; a private
-  toggle + lock icon on the call detail.
-* **Tests:** one parametrized case per (viewer role, relationship,
-  private?) cell of the access matrix — this is the whole test surface.
+* **`User.manager_id`** (nullable, same-org, `ON DELETE SET NULL`) +
+  **`User.user_ref`** — links a login to the opaque id integrations send
+  on `/ws/capture`. Both patched onto `users` with `ADD COLUMN IF NOT
+  EXISTS`. `IdentityStore.set_manager` (rejects self / cross-org) /
+  `set_user_ref`.
+* **`packages/calls/access.py`** (pure, unit-tested):
+  `report_refs(users, root_id)` — the `user_ref`s in a manager's report
+  tree (cycle-safe); `can_view_call(...)` — visible unless `private`,
+  where only owner / shared / `@mentioned` / admin get in (RingFence
+  operators are a review team, so a *public* call is visible org-wide —
+  the tree is a filter, not a wall); `in_scope(scope, …)` narrows to
+  `mine` / `team` / `all`.
+* **`call_ledger.private BOOL`** (default false) + **`call_shares`**
+  `(session_id, shared_with_user, shared_by, shared_at)`, cascading with
+  the call. `CallLedger` gains `set_private` / `share` / `unshare` /
+  `shares`.
+* **Endpoints:** `PATCH /calls/{sid} {private}` and
+  `POST /calls/{sid}/share {email}` / `DELETE /calls/{sid}/share/{uid}`
+  (owner or admin); `GET /calls?scope=mine|team|all` (default `all`);
+  `GET /calls/{sid}` now 404s unless you may see it, and returns
+  `private` / `shared_with` / `can_manage`. `PATCH /orgs/users/{id}
+  {manager_id?, user_ref?}` (admin); `GET /orgs/users` carries both.
+  Comment access (P3) is gated by the same rule.
+* **Console:** an **Everyone / My team / Mine** scope switch on the Calls
+  list; a lock badge + Make-private / Share panel on the call detail
+  (when `can_manage`); an admin **Team** tab to set each user's manager
+  and employee ref.
+* **Tests:** `test_call_access.py` parametrises the matrix;
+  `test_calls_gateway.py` covers private-hide/share/unshare, `scope=mine`
+  / `team`, owner-or-admin-only management, and the `/orgs/users` fields.
 
 ## Phase 5 — access audit log
 

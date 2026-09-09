@@ -148,6 +148,29 @@ def test_set_password_and_set_verified() -> None:
             call()
 
 
+def test_set_manager_and_user_ref() -> None:
+    s, org, admin = _store_with_org()
+    lead = s.add_user(org_id=org.id, email="lead@acme.co", password="pw-11112222", role="operator")
+    rep = s.add_user(org_id=org.id, email="rep@acme.co", password="pw-33334444", role="operator")
+
+    s.set_manager(rep.id, lead.id)
+    s.set_user_ref(rep.id, "rep-007")
+    got = s.get_user(rep.id)
+    assert got is not None and got.manager_id == lead.id and got.user_ref == "rep-007"
+    s.set_manager(rep.id, None)
+    assert s.get_user(rep.id).manager_id is None  # type: ignore[union-attr]
+
+    with pytest.raises(IdentityError):
+        s.set_manager(rep.id, rep.id)  # self
+    other_org, other_admin = s.create_org_with_admin(
+        org_name="B", email="a@b.co", password="pw-55556666"
+    )
+    with pytest.raises(IdentityError):
+        s.set_manager(rep.id, other_admin.id)  # cross-org
+    with pytest.raises(IdentityError):
+        s.set_manager("nope", lead.id)
+
+
 def test_list_users_is_scoped_to_the_org_and_ordered() -> None:
     s, org_a, admin_a = _store_with_org()
     org_b, admin_b = s.create_org_with_admin(

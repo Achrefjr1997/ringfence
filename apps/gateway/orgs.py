@@ -134,10 +134,35 @@ def build_org_routes(store: IdentityStore, secret: str, *, billing: BillingStore
                     "role": u.role,
                     "verified": u.verified,
                     "created_at": u.created_at,
+                    "manager_id": u.manager_id,
+                    "user_ref": u.user_ref,
                 }
                 for u in store.list_users(admin.org_id)
             ]
         )
+
+    async def update_org_user(request: Request) -> Response:
+        """Admin sets a user's manager and/or the employee ref that links
+        their login to the id integrations pass on ``/ws/capture`` (P4)."""
+        admin = _require_admin(request)
+        if isinstance(admin, JSONResponse):
+            return admin
+        target = store.get_user(request.path_params["user_id"])
+        if target is None or target.org_id != admin.org_id:
+            return JSONResponse({"error": "no such user"}, status_code=404)
+        body = await read_json_body(request)
+        try:
+            if "manager_id" in body:
+                mid = body["manager_id"]
+                store.set_manager(target.id, str(mid) if mid else None)
+            if "user_ref" in body:
+                ref = body["user_ref"]
+                store.set_user_ref(target.id, str(ref).strip() if ref else None)
+        except IdentityError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        u = store.get_user(target.id)
+        assert u is not None
+        return JSONResponse({"user_id": u.id, "manager_id": u.manager_id, "user_ref": u.user_ref})
 
     return [
         Route("/orgs/keys", create_key, methods=["POST"]),
@@ -145,4 +170,5 @@ def build_org_routes(store: IdentityStore, secret: str, *, billing: BillingStore
         Route("/orgs/keys/{key_id}", delete_key, methods=["DELETE"]),
         Route("/orgs/users", create_user, methods=["POST"]),
         Route("/orgs/users", list_org_users, methods=["GET"]),
+        Route("/orgs/users/{user_id}", update_org_user, methods=["PATCH"]),
     ]

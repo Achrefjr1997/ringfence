@@ -170,6 +170,50 @@ class PgCallLedger:
                 turn_count,
             )
 
+    def set_private(self, session_id: str, private: bool) -> None:
+        self._run(
+            self._exec(
+                "UPDATE call_ledger SET private = $2 WHERE session_id = $1", session_id, private
+            )
+        )
+
+    def share(self, session_id: str, *, user_id: str, by: str) -> None:
+        self._run(
+            self._exec(
+                "INSERT INTO call_shares (session_id, shared_with_user, shared_by, shared_at) "
+                "VALUES ($1, $2, $3, $4) ON CONFLICT (session_id, shared_with_user) DO NOTHING",
+                session_id,
+                user_id,
+                by,
+                time.time(),
+            )
+        )
+
+    def unshare(self, session_id: str, user_id: str) -> None:
+        self._run(
+            self._exec(
+                "DELETE FROM call_shares WHERE session_id = $1 AND shared_with_user = $2",
+                session_id,
+                user_id,
+            )
+        )
+
+    def shares(self, session_id: str) -> list[str]:
+        return self._run(self._shares(session_id))
+
+    async def _exec(self, sql: str, *args: object) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(sql, *args)
+
+    async def _shares(self, session_id: str) -> list[str]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT shared_with_user FROM call_shares WHERE session_id = $1 "
+                "ORDER BY shared_with_user",
+                session_id,
+            )
+        return [r["shared_with_user"] for r in rows]
+
     # -- reads ----------------------------------------------------
 
     def get(self, session_id: str) -> CallRecord | None:
@@ -304,5 +348,6 @@ def _record(row: Any, scores: tuple[ScorePoint, ...]) -> CallRecord:
         peak_score=row["peak_score"],
         leg_count=row["leg_count"],
         turn_count=row["turn_count"],
+        private=row["private"],
         scores=scores,
     )

@@ -52,7 +52,9 @@ function shell(active, view) {
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2.5 3.5 6v6c0 5 3.6 8.5 8.5 9.5 4.9-1 8.5-4.5 8.5-9.5V6L12 2.5Z" stroke="#3dd4e0" stroke-width="1.6"/><path d="M12 8v4.5M12 15.5v.01" stroke="#3dd4e0" stroke-width="1.8" stroke-linecap="round"/></svg>
       RingFence
     </div>`;
-  for (const [href, label] of [["#/overview", "Overview"], ["#/calls", "Calls"], ["#/cases", "Cases"], ["#/keys", "API keys"], ["#/live", "Live"]]) {
+  const tabs = [["#/overview", "Overview"], ["#/calls", "Calls"], ["#/cases", "Cases"], ["#/keys", "API keys"], ["#/live", "Live"]];
+  if (store.role === "admin") tabs.splice(4, 0, ["#/team", "Team"]);
+  for (const [href, label] of tabs) {
     nav.append(el("a", { href, className: active === href ? "on" : "", textContent: label }));
   }
   const who = el("div", { className: "who" });
@@ -230,6 +232,38 @@ async function caseDetailView(sid) {
   } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
+// ---------- team (P4 RBAC) ----------
+async function teamView() {
+  const m = page("Team", "Set each operator's manager and link their login to the employee id integrations send.");
+  shell("#/team", m);
+  const box = el("div", { className: "card" }); box.textContent = "loading…"; m.append(box);
+  try {
+    const users = await api("/orgs/users");
+    box.innerHTML = "";
+    const t = el("table");
+    t.innerHTML = "<thead><tr><th>user</th><th>role</th><th>manager</th><th>employee ref</th></tr></thead>";
+    const tb = el("tbody");
+    for (const u of users) {
+      const tr = el("tr");
+      const mgr = el("select", { className: "field", style: "max-width:200px" });
+      mgr.append(el("option", { value: "", textContent: "— none —" }));
+      for (const o of users) if (o.user_id !== u.user_id) mgr.append(el("option", { value: o.user_id, textContent: o.email }));
+      mgr.value = u.manager_id || "";
+      mgr.onchange = () => api(`/orgs/users/${u.user_id}`, { method: "PATCH", body: { manager_id: mgr.value || null } }).catch((e) => alert(e.message));
+      const ref = el("input", { className: "field", style: "max-width:200px", value: u.user_ref || "" });
+      ref.onchange = () => api(`/orgs/users/${u.user_id}`, { method: "PATCH", body: { user_ref: ref.value.trim() || null } }).catch((e) => alert(e.message));
+      tr.append(
+        el("td", { innerHTML: `<span class="mono" style="font-size:12px">${esc(u.email)}</span>` }),
+        el("td", { textContent: u.role }),
+        el("td"), el("td"),
+      );
+      tr.children[2].append(mgr); tr.children[3].append(ref);
+      tb.append(tr);
+    }
+    t.append(tb); box.append(t);
+  } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
 // ---------- calls (oversight) ----------
 const ST_COLOR = { CALM: "--calm", WATCH: "--watch", ALERT: "--alert", INTERVENE: "--intervene", RESOLVED: "--alert" };
 
@@ -244,10 +278,12 @@ async function callsView() {
   const bar = el("div", { className: "row", style: "gap:10px;margin-bottom:14px;flex-wrap:wrap" });
   const grp = el("select", { className: "field", style: "max-width:170px" });
   grp.innerHTML = `<option value="calls">All calls</option><option value="users">By employee</option>`;
+  const scope = el("select", { className: "field", style: "max-width:130px" });
+  scope.innerHTML = `<option value="all">Everyone</option><option value="team">My team</option><option value="mine">Mine</option>`;
   const sel = el("select", { className: "field", style: "max-width:240px" });
   sel.innerHTML = `<option value="">all API keys</option>`;
   const usr = el("input", { className: "field", style: "max-width:220px", placeholder: "filter by employee id" });
-  bar.append(grp, sel, usr);
+  bar.append(grp, scope, sel, usr);
   m.append(bar);
   const box = el("div", { className: "card" }); box.textContent = "loading…"; m.append(box);
 
@@ -263,6 +299,7 @@ async function callsView() {
     const p = new URLSearchParams();
     if (sel.value) p.set("key_id", sel.value);
     if (usr.value.trim()) p.set("user", usr.value.trim());
+    if (scope.value !== "all") p.set("scope", scope.value);
     const s = p.toString();
     return s ? "?" + s : "";
   }
@@ -307,11 +344,11 @@ async function callsView() {
   async function load() {
     box.textContent = "loading…";
     const byUser = grp.value === "users";
-    sel.hidden = byUser; usr.hidden = byUser;
+    sel.hidden = byUser; usr.hidden = byUser; scope.hidden = byUser;
     try { await (byUser ? loadUsers() : loadCalls()); }
     catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
   }
-  grp.onchange = load; sel.onchange = load;
+  grp.onchange = load; sel.onchange = load; scope.onchange = load;
   usr.onchange = load;
   load();
 }
@@ -351,8 +388,9 @@ async function callDetailView(sid) {
   const box = el("div", { className: "card" }); box.textContent = "loading…"; m.append(box);
   try {
     const c = await api(`/calls/${encodeURIComponent(sid)}`);
-    box.innerHTML = `<div class="row" style="gap:12px;flex-wrap:wrap"><span class="pill st-${c.peak_state}">${c.peak_state}</span><span class="mono">peak ${c.peak_score}</span>${c.user_ref ? `<span class="mono" style="color:var(--t2)">${esc(c.user_label || c.user_ref)}</span>` : ""}<span class="sub" style="margin:0">${c.live ? "live now" : fmtDur(c.duration_s)} · ${(c.scores || []).length} decisions</span>${c.has_case ? `<a href="#/cases/${encodeURIComponent(sid)}" style="font-size:12px">open case →</a>` : ""}</div>`;
+    box.innerHTML = `<div class="row" style="gap:12px;flex-wrap:wrap"><span class="pill st-${c.peak_state}">${c.peak_state}</span><span class="mono">peak ${c.peak_score}</span>${c.user_ref ? `<span class="mono" style="color:var(--t2)">${esc(c.user_label || c.user_ref)}</span>` : ""}${c.private ? `<span class="pill st-INTERVENE">🔒 private</span>` : ""}<span class="sub" style="margin:0">${c.live ? "live now" : fmtDur(c.duration_s)} · ${(c.scores || []).length} decisions</span>${c.has_case ? `<a href="#/cases/${encodeURIComponent(sid)}" style="font-size:12px">open case →</a>` : ""}</div>`;
     box.append(scoreChart(c.scores || []));
+    if (c.can_manage) box.append(accessPanel(sid, c));
     const tx = el("div", { style: "font-family:var(--mono);font-size:12px;margin-top:16px;line-height:1.7" });
     for (const [role, text, t] of c.transcript || []) tx.innerHTML += `<div><span style="color:var(--t2)">${role} t${t}</span> <span style="color:${role === "CALLER" ? "var(--caller)" : role === "CALLEE" ? "var(--callee)" : "var(--t2)"}">${esc(text)}</span></div>`;
     if (!(c.transcript || []).length) tx.innerHTML = `<span class="sub">transcript not retained (needs RF_RETAIN_TRANSCRIPTS, and only ALERT+ calls open a case)</span>`;
@@ -360,6 +398,21 @@ async function callDetailView(sid) {
     box.append(el("a", { href: "#/calls", textContent: "← all calls", style: "display:inline-block;margin-top:16px;font-size:13px" }));
     m.append(commentsPanel(sid));
   } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+function accessPanel(sid, c) {
+  const p = el("div", { style: "margin-top:12px;border-top:1px solid var(--line, #ffffff14);padding-top:10px" });
+  const priv = el("button", { className: "btn ghost", textContent: c.private ? "Make public" : "Make private", style: "font-size:12px" });
+  priv.onclick = async () => { await api(`/calls/${encodeURIComponent(sid)}`, { method: "PATCH", body: { private: !c.private } }); callDetailView(sid); };
+  const shareRow = el("div", { className: "row", style: "gap:8px;margin-top:8px;flex-wrap:wrap" });
+  const email = el("input", { className: "field", style: "max-width:220px", placeholder: "share with (email)" });
+  const add = el("button", { className: "btn", textContent: "Share", style: "font-size:12px" });
+  add.onclick = async () => { try { await api(`/calls/${encodeURIComponent(sid)}/share`, { method: "POST", body: { email: email.value.trim() } }); callDetailView(sid); } catch (e) { alert(e.message); } };
+  shareRow.append(email, add);
+  const list = el("div", { className: "sub", style: "margin:6px 0 0" });
+  list.textContent = (c.shared_with || []).length ? "shared with " + c.shared_with.length + " user(s)" : "not shared";
+  p.append(priv, shareRow, list);
+  return p;
 }
 
 // ---------- threaded review comments ----------
@@ -558,6 +611,7 @@ function route() {
   if (h.startsWith("#/calls/")) return callDetailView(decodeURIComponent(h.slice("#/calls/".length)));
   if (h === "#/calls") return callsView();
   if (h === "#/keys") return keysView();
+  if (h === "#/team") return teamView();
   if (h === "#/live") return liveView();
   return overviewView();
 }

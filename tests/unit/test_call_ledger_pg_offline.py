@@ -7,8 +7,15 @@ from packages.calls.pg_ledger import schema_sql
 
 def test_schema_declares_both_tables_and_is_idempotent() -> None:
     sql = schema_sql()
-    for table in ("call_ledger", "call_scores", "call_comments", "call_comment_mentions"):
+    for table in (
+        "call_ledger",
+        "call_scores",
+        "call_comments",
+        "call_comment_mentions",
+        "call_shares",
+    ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
+    assert "private BOOLEAN NOT NULL DEFAULT FALSE" in sql  # P4 alter
     assert sql.count("CREATE TABLE ") == sql.count("CREATE TABLE IF NOT EXISTS ")
     assert sql.count("CREATE INDEX ") == sql.count("CREATE INDEX IF NOT EXISTS ")
     # the score series is wiped with its call

@@ -32,7 +32,7 @@ _R = TypeVar("_R")
 _M = TypeVar("_M")
 
 _ORG_COLS = "id, name, tenant, created_at"
-_USER_COLS = "id, org_id, email, password_hash, role, verified, created_at"
+_USER_COLS = "id, org_id, email, password_hash, role, verified, created_at, manager_id, user_ref"
 _KEY_COLS = "id, org_id, name, prefix, key_hash, created_at, last_used_at, revoked"
 
 
@@ -49,6 +49,8 @@ def _user(row: Any) -> User:
         role=row["role"],
         verified=row["verified"],
         created_at=row["created_at"],
+        manager_id=row["manager_id"],
+        user_ref=row["user_ref"],
     )
 
 
@@ -179,7 +181,7 @@ class PgIdentityStore:
     @staticmethod
     async def _insert_user(conn: Any, user: User) -> None:
         await conn.execute(
-            f"INSERT INTO users ({_USER_COLS}) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            f"INSERT INTO users ({_USER_COLS}) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             user.id,
             user.org_id,
             user.email,
@@ -187,6 +189,8 @@ class PgIdentityStore:
             user.role,
             user.verified,
             user.created_at,
+            user.manager_id,
+            user.user_ref,
         )
 
     def get_user(self, user_id: str) -> User | None:
@@ -226,6 +230,30 @@ class PgIdentityStore:
 
     def set_verified(self, user_id: str) -> User:
         return self._run(self._update_user("UPDATE users SET verified = TRUE", user_id))
+
+    def set_manager(self, user_id: str, manager_id: str | None) -> User:
+        return self._run(self._set_manager(user_id, manager_id))
+
+    async def _set_manager(self, user_id: str, manager_id: str | None) -> User:
+        if manager_id is not None:
+            if manager_id == user_id:
+                raise IdentityError("a user cannot manage themselves")
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT id, org_id FROM users WHERE id = ANY($1::text[])",
+                    [user_id, manager_id],
+                )
+            by_id = {r["id"]: r["org_id"] for r in rows}
+            if user_id not in by_id:
+                raise IdentityError(f"no such user {user_id}")
+            if by_id.get(manager_id) != by_id[user_id]:
+                raise IdentityError("manager must be a user in the same org")
+        return await self._update_user("UPDATE users SET manager_id = $2", user_id, manager_id)
+
+    def set_user_ref(self, user_id: str, user_ref: str | None) -> User:
+        return self._run(
+            self._update_user("UPDATE users SET user_ref = $2", user_id, user_ref or None)
+        )
 
     async def _update_user(self, set_clause: str, user_id: str, *args: object) -> User:
         async with self._pool.acquire() as conn:

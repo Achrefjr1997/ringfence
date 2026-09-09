@@ -25,7 +25,12 @@ CREATE TABLE IF NOT EXISTS users (
     created_at    DOUBLE PRECISION NOT NULL
 );
 
+-- call-oversight P4: manager tree + the employee ref an integration passes
+ALTER TABLE users ADD COLUMN IF NOT EXISTS manager_id TEXT REFERENCES users (id) ON DELETE SET NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS user_ref TEXT;
+
 CREATE INDEX IF NOT EXISTS users_org_id_idx ON users (org_id);
+CREATE INDEX IF NOT EXISTS users_manager_id_idx ON users (manager_id);
 
 CREATE TABLE IF NOT EXISTS api_keys (
     id           TEXT        PRIMARY KEY,

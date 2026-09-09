@@ -104,6 +104,28 @@ def test_user_summaries_roll_up_per_employee() -> None:
     assert [u.user_ref for u in lg.user_summaries("acme")] == ["alice", "bob"]
 
 
+def test_private_flag_and_shares() -> None:
+    lg = _ledger()
+    lg.open("s1", tenant="acme", api_key_id="k1", started_at=0.0)
+    assert lg.get("s1").private is False  # type: ignore[union-attr]
+
+    lg.set_private("s1", True)
+    assert lg.get("s1").private is True  # type: ignore[union-attr]
+    lg.set_private("s1", False)
+    assert lg.get("s1").private is False  # type: ignore[union-attr]
+
+    lg.share("s1", user_id="u2", by="u1")
+    lg.share("s1", user_id="u3", by="u1")
+    lg.share("s1", user_id="u2", by="u1")  # idempotent
+    assert lg.shares("s1") == ["u2", "u3"]
+    lg.unshare("s1", "u2")
+    assert lg.shares("s1") == ["u3"]
+
+    # a share against an unknown call is a no-op, not a crash
+    lg.share("ghost", user_id="u9", by="u1")
+    assert lg.shares("ghost") == []
+
+
 def test_list_rows_carry_no_score_series_but_get_does() -> None:
     lg = _ledger()
     lg.open("s1", tenant="acme", api_key_id="k1", started_at=0.0)
