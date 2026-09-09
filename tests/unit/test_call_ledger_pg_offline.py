@@ -13,9 +13,13 @@ def test_schema_declares_both_tables_and_is_idempotent() -> None:
         "call_comments",
         "call_comment_mentions",
         "call_shares",
+        "call_access_log",
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
     assert "private BOOLEAN NOT NULL DEFAULT FALSE" in sql  # P4 alter
+    # P5: the audit trail outlives the ledger row -- no cascade off it
+    audit = sql[sql.index("call_access_log") : sql.index("call_access_log_session_idx")]
+    assert "REFERENCES" not in audit and "CASCADE" not in audit
     assert sql.count("CREATE TABLE ") == sql.count("CREATE TABLE IF NOT EXISTS ")
     assert sql.count("CREATE INDEX ") == sql.count("CREATE INDEX IF NOT EXISTS ")
     # the score series is wiped with its call

@@ -294,3 +294,48 @@ def test_org_users_carry_manager_and_ref(client: TestClient) -> None:
         ).status_code
         == 404
     )
+
+
+# -- P5: access audit log --------------------------------------------
+
+
+def test_reads_and_mutations_are_audited(client: TestClient) -> None:
+    admin_token, _ = _admin(client)
+    key = client.post("/orgs/keys", json={"name": "gw"}, headers=_h(admin_token)).json()["key"]
+    _call_as(client, key, "a1", user="alice")
+
+    client.get("/calls", headers=_h(admin_token))
+    client.get("/calls/a1", headers=_h(admin_token))
+    client.post("/calls/a1/comments", json={"body": "hi"}, headers=_h(admin_token))
+    client.patch("/calls/a1", json={"private": True}, headers=_h(admin_token))
+    client.post("/calls/a1/share", json={"email": "a@acme.co"}, headers=_h(admin_token))
+
+    per_call = client.get("/calls/a1/access-log", headers=_h(admin_token))
+    assert per_call.status_code == 200
+    assert set(e["action"] for e in per_call.json()) == {"view", "comment", "set_private", "share"}
+    assert per_call.json()[0]["actor_email"] == "a@acme.co"
+
+    all_audit = client.get("/audit", headers=_h(admin_token)).json()
+    assert any(e["action"] == "list" and e["session_id"] is None for e in all_audit)
+    only_share = client.get("/audit?action=share", headers=_h(admin_token)).json()
+    assert only_share and all(e["action"] == "share" for e in only_share)
+    assert client.get("/audit?action=bogus", headers=_h(admin_token)).status_code == 400
+
+
+def test_audit_is_admin_only(client: TestClient) -> None:
+    admin_token, _ = _admin(client)
+    key = client.post("/orgs/keys", json={"name": "gw"}, headers=_h(admin_token)).json()["key"]
+    _call_as(client, key, "a2")
+    op_token, _ = _operator(client, admin_token, "op@acme.co")
+    assert client.get("/calls/a2/access-log", headers=_h(op_token)).status_code == 403
+    assert client.get("/audit", headers=_h(op_token)).status_code == 403
+    assert client.get("/audit").status_code == 401
+
+
+def test_no_delete_route_for_the_audit_log(client: TestClient) -> None:
+    admin_token, _ = _admin(client)
+    key = client.post("/orgs/keys", json={"name": "gw"}, headers=_h(admin_token)).json()["key"]
+    _call_as(client, key, "a3")
+    client.get("/calls/a3", headers=_h(admin_token))
+    assert client.delete("/calls/a3/access-log", headers=_h(admin_token)).status_code in (404, 405)
+    assert client.delete("/audit", headers=_h(admin_token)).status_code in (404, 405)
