@@ -375,3 +375,27 @@ def test_call_detail_transcript_is_empty_without_retention(client: TestClient) -
     key = client.post("/orgs/keys", json={"name": "gw"}, headers=_h(admin_token)).json()["key"]
     _call_as(client, key, "t2")
     assert client.get("/calls/t2", headers=_h(admin_token)).json()["transcript"] == []
+
+
+# -- P8: live wall --------------------------------------------------
+
+
+def test_sessions_lists_live_calls_scoped_to_the_tenant(client: TestClient) -> None:
+    admin_token, _ = _admin(client)
+    key = client.post("/orgs/keys", json={"name": "gw"}, headers=_h(admin_token)).json()["key"]
+
+    with client.websocket_connect(f"/ws/capture?session=w1&leg=far&key={key}&user=alice") as ws:
+        ws.send_bytes(b"\x00\x00" * 160)
+        rows = client.get("/sessions", headers=_h(admin_token)).json()
+        assert {r["session_id"] for r in rows} == {"w1"}
+        (row,) = rows
+        assert row["user_ref"] == "alice" and row["started_at"] > 0
+        assert row["state"] in ("CALM", "WATCH", "ALERT", "INTERVENE")
+
+    # socket closed -> gone from the wall
+    assert client.get("/sessions", headers=_h(admin_token)).json() == []
+
+
+def test_sessions_and_events_all_require_auth(client: TestClient) -> None:
+    assert client.get("/sessions").status_code == 401
+    assert client.get("/events").status_code == 401

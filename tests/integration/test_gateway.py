@@ -68,6 +68,7 @@ def test_console_static_files_are_served() -> None:
     assert "/calls/users" in webapp  # oversight: group-by-employee roll-up
     assert "/comments" in webapp and "commentsPanel" in webapp  # oversight: threaded review
     assert "accessLogPanel" in webapp and "/access-log" in webapp  # oversight: audit trail
+    assert "wallView" in webapp and "/sessions" in webapp  # oversight: live wall
     wk = client.get("/worklet.js")
     assert wk.status_code == 200
     assert "registerProcessor" in wk.text

@@ -17,7 +17,7 @@ comparable products do it (see *Prior art* at the end).
 | **5** | Access audit log (who viewed / played / exported which call) | — | **shipped** (`feat/oversight-p5-audit`) |
 | **6** | Transcript retained for *every* call, not just ALERT+ cases | `RF_RETAIN_TRANSCRIPTS` (invariant #5) | **shipped** (`feat/oversight-p6-transcript`) |
 | **7** | Full-conversation audio: capture, storage, playback, retention | **T-7.0 legal basis + DPA** | planned |
-| **8** | Live wall (supervisor sees every active call) | — | planned |
+| **8** | Live wall (supervisor sees every active call) | — | **shipped** (`feat/oversight-p8-livewall`) |
 | **9** | Employee timeline + per-tenant retention controls | — | planned |
 
 Only **Phase 7** is legally gated. Phases 2–6 and 8 can ship without
@@ -233,21 +233,24 @@ opt-in and off by default.
   403 + audit row; retention sweep deletes and nulls the key; an
   invariant test that no audio is persisted with `RF_RETAIN_AUDIO` unset.
 
-## Phase 8 — live wall
+## Phase 8 — live wall *(shipped)*
 
 **Goal:** a supervisor sees every call happening right now.
 
-* **`GET /sessions`** — tenant-scoped: `session_id`, `api_key_id`,
-  `user_ref`, `started_at`, current `state`/`score` (from the live
-  `_Live` + last ledger score point).
-* **`GET /events?tenant=`** — SSE with no `session_id`; the handler
-  already subscribes to `rf.<tenant>.*` and then filters to one session,
-  so this is dropping the filter for the no-id form.
-* **Console:** a **Wall** view — a grid of live call cards, each a mini
-  score gauge + state pill, linking to the live call detail.
-* **Tests:** `/sessions` scoping; the tenant SSE streams multiple
-  sessions; auth.
-
+* **`GET /sessions`** — the tenant's live calls: `session_id`,
+  `api_key_id`, `user_ref`, `started_at`, `legs`, current `state` / `score`
+  (last ledger point), `peak_state`. Accepts a console login **or** an API
+  key, so the wall works without issuing a key first.
+* **`GET /events`** (no `session_id`) — SSE `decision` / `turn` / `end`
+  for **every** session in the tenant; the per-session `/events/{id}`
+  already subscribed `rf.<tenant>.*` and filtered, so this just drops the
+  filter. Auth unchanged (API key, or `?tenant=` in dev).
+* **Console:** a **Wall** tab — a responsive grid of live-call cards, each
+  a state pill + score bar + elapsed timer + employee, updated from the
+  tenant SSE stream and re-seeded from `/sessions` every 5 s; a card
+  clicks through to the call detail and disappears on its `end` event.
+* **Tests:** `/sessions` lists live calls, tenant-scoped, drops on socket
+  close; `/sessions` and `/events` need auth.
 ## Phase 9 — employee timeline + retention controls
 
 * **Console:** an employee page — all their calls on one timeline, a
