@@ -52,8 +52,8 @@ function shell(active, view) {
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2.5 3.5 6v6c0 5 3.6 8.5 8.5 9.5 4.9-1 8.5-4.5 8.5-9.5V6L12 2.5Z" stroke="#3dd4e0" stroke-width="1.6"/><path d="M12 8v4.5M12 15.5v.01" stroke="#3dd4e0" stroke-width="1.8" stroke-linecap="round"/></svg>
       RingFence
     </div>`;
-  const tabs = [["#/overview", "Overview"], ["#/calls", "Calls"], ["#/cases", "Cases"], ["#/keys", "API keys"], ["#/live", "Live"]];
-  if (store.role === "admin") tabs.splice(4, 0, ["#/team", "Team"]);
+  const tabs = [["#/overview", "Overview"], ["#/wall", "Wall"], ["#/calls", "Calls"], ["#/cases", "Cases"], ["#/keys", "API keys"], ["#/live", "Live"]];
+  if (store.role === "admin") tabs.splice(tabs.findIndex(([h]) => h === "#/live"), 0, ["#/team", "Team"]);
   for (const [href, label] of tabs) {
     nav.append(el("a", { href, className: active === href ? "on" : "", textContent: label }));
   }
@@ -496,6 +496,64 @@ function commentsPanel(sid) {
   return panel;
 }
 
+// ---------- wall (P8: every live call) ----------
+let wallEs = null;
+
+function wallView() {
+  const m = page("Wall", "Every call happening right now across the org.");
+  shell("#/wall", m);
+  const grid = el("div", { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px" });
+  m.append(grid);
+  const empty = el("div", { className: "sub" }); empty.textContent = "no live calls"; m.append(empty);
+  const cards = new Map();
+
+  function render(list) {
+    const seen = new Set();
+    for (const s of list) {
+      seen.add(s.session_id);
+      let c = cards.get(s.session_id);
+      if (!c) { c = el("div", { className: "card", style: "cursor:pointer" }); c.onclick = () => { location.hash = `#/calls/${encodeURIComponent(s.session_id)}`; }; grid.append(c); cards.set(s.session_id, c); }
+      c.dataset.state = s.state; c.dataset.score = s.score;
+      paint(c, s);
+    }
+    for (const [id, c] of cards) if (!seen.has(id)) { c.remove(); cards.delete(id); }
+    empty.hidden = cards.size > 0;
+  }
+  function paint(c, s) {
+    const who = s.user_ref ? esc(s.user_ref) : "<span style='color:var(--t2)'>—</span>";
+    const secs = Math.max(0, Math.round(Date.now() / 1000 - (s.started_at || 0)));
+    const st = c.dataset.state || s.state || "CALM";
+    const sc = Number(c.dataset.score ?? s.score ?? 0);
+    c.innerHTML = `<div class="row" style="justify-content:space-between"><span class="mono" style="font-size:12px">${esc((s.session_id || "").slice(0, 12))}</span><span class="pill st-${st}">${st}</span></div>
+      <div class="bar" style="margin:8px 0"><span style="width:${Math.min(100, sc)}%"></span></div>
+      <div class="row" style="justify-content:space-between;font-size:11px;color:var(--t2)"><span>${who}</span><span class="mono">${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}</span></div>`;
+  }
+
+  async function seed() {
+    try { render(await api("/sessions")); }
+    catch (e) { empty.textContent = e.message; }
+  }
+  seed();
+  const poll = setInterval(seed, 5000);
+  const tick = setInterval(() => { for (const [id, c] of cards) paint(c, { session_id: id, started_at: Number(c.dataset.started || 0) }); }, 1000);
+
+  const key = store.liveKey, org = store.org || "";
+  const q = key ? `?key=${encodeURIComponent(key)}&tenant=${encodeURIComponent(org)}` : `?tenant=${encodeURIComponent(org)}`;
+  wallEs && wallEs.close();
+  wallEs = new EventSource(`/events${q}`);
+  wallEs.addEventListener("decision", (ev) => {
+    try {
+      const d = JSON.parse(ev.data);
+      const c = cards.get(d.session_id);
+      if (c) { c.dataset.state = d.state; c.dataset.score = d.score; paint(c, { session_id: d.session_id, user_ref: c.dataset.user }); }
+    } catch { /* ignore malformed frame */ }
+  });
+  wallEs.addEventListener("end", (ev) => { try { const d = JSON.parse(ev.data); const c = cards.get(d.session_id); if (c) { c.remove(); cards.delete(d.session_id); empty.hidden = cards.size > 0; } } catch { /* */ } });
+
+  const stop = () => { clearInterval(poll); clearInterval(tick); wallEs && wallEs.close(); wallEs = null; window.removeEventListener("hashchange", stop); };
+  window.addEventListener("hashchange", stop);
+}
+
 // ---------- live ----------
 let detach = null;
 function liveView() {
@@ -628,6 +686,7 @@ function route() {
   if (h === "#/calls") return callsView();
   if (h === "#/keys") return keysView();
   if (h === "#/team") return teamView();
+  if (h === "#/wall") return wallView();
   if (h === "#/live") return liveView();
   return overviewView();
 }

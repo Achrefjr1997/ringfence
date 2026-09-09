@@ -560,6 +560,63 @@ def create_app(
 
         return EventSourceResponse(stream())
 
+    async def events_all(request: Request) -> Response:
+        """Live wall (P8): every session's decisions/turns for the tenant,
+        not one. Same auth as ``/events/{id}``."""
+        tenant, reason = read_tenant(request)
+        if reason is not None:
+            return JSONResponse({"error": reason.lower()}, status_code=401)
+        pattern = tenant_pattern(tenant) if tenant else "rf.*"
+
+        async def stream() -> AsyncIterator[dict[str, object]]:
+            async for subject, payload in the_bus.subscribe(pattern):
+                if subject.endswith(".decision"):
+                    yield {"event": "decision", "data": json.dumps(payload)}
+                elif subject.endswith(".turn"):
+                    yield {"event": "turn", "data": json.dumps(payload)}
+                elif subject.endswith(".session.closed"):
+                    yield {"event": "end", "data": json.dumps(payload)}
+                if await request.is_disconnected():
+                    return
+
+        return EventSourceResponse(stream())
+
+    async def sessions_endpoint(request: Request) -> JSONResponse:
+        """Every call happening right now, for the tenant (the live wall).
+
+        Accepts a console login (JWT) or an API key, so the wall works
+        from the console without issuing a key first.
+        """
+        user, err = case_access(request)
+        if err is not None:
+            tenant, reason = read_tenant(request)
+            if reason is not None:
+                return JSONResponse({"error": reason.lower()}, status_code=401)
+        else:
+            tenant = user.org_id if user is not None else request.query_params.get("tenant")
+        live_now = [
+            (sid, live) for sid, live in sessions.items() if tenant is None or live.tenant == tenant
+        ]
+        live_now.sort(key=lambda p: p[1].started_at, reverse=True)
+        out: list[dict[str, object]] = []
+        for sid, live in live_now:
+            rec = the_ledger.get(sid)
+            last = rec.scores[-1] if rec and rec.scores else None
+            out.append(
+                {
+                    "session_id": sid,
+                    "tenant": live.tenant,
+                    "api_key_id": live.api_key_id,
+                    "user_ref": live.user_ref,
+                    "started_at": live.started_at,
+                    "legs": sorted(live.legs),
+                    "state": last.state if last else "CALM",
+                    "score": round(last.score, 1) if last else 0.0,
+                    "peak_state": rec.peak_state if rec else "CALM",
+                }
+            )
+        return JSONResponse(out)
+
     def case_access(request: Request) -> tuple[User | None, JSONResponse | None]:
         """``(user, error)``.  In ``dev_mode`` returns ``(None, None)`` — no
         auth, every case visible (the current local/demo behaviour)."""
@@ -1129,7 +1186,9 @@ def create_app(
     routes: list[Route | WebSocketRoute | Mount] = [
         Route("/health", health),
         Route("/metrics", metrics_endpoint),
+        Route("/events", events_all),
         Route("/events/{session_id}", events),
+        Route("/sessions", sessions_endpoint),
         Route("/replay/{fixture_id}", replay_fixture, methods=["POST"]),
         Route("/cases", list_cases),
         Route("/cases/{session_id}", get_case),
