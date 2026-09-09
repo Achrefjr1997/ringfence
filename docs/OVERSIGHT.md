@@ -11,7 +11,7 @@ comparable products do it (see *Prior art* at the end).
 | Phase | Delivers | Gate | Status |
 |---|---|---|---|
 | **1** | Call ledger + escalation graph | — | **shipped** (`feat/call-oversight`) |
-| **2** | Per-employee attribution + "my calls" | — | planned |
+| **2** | Per-employee attribution + "by employee" roll-up | — | **shipped** (`feat/oversight-p2-users`) |
 | **3** | Threaded review (timestamped comments, @mention, visibility) | — | planned |
 | **4** | RBAC hierarchy (own → team → org) + private calls + shares | — | planned |
 | **5** | Access audit log (who viewed / played / exported which call) | — | planned — **precedes 7** |
@@ -64,32 +64,32 @@ counsel.
 
 ---
 
-## Phase 2 — per-employee attribution
+## Phase 2 — per-employee attribution *(shipped)*
 
 **Goal:** every call is attributed to the employee who was on it, so an
-admin can answer "show me Alice's calls" and an employee can see "my
-calls".
+admin can answer "show me Alice's calls" and see a per-employee roll-up.
 
 RingFence does **not** manage employee accounts — the employer's IdP
 does. The integration supplies an opaque identifier when it opens the
 socket.
 
-* **Wire:** `/ws/capture?user=<ref>` **or** header
-  `X-RingFence-User: <ref>.<hmac>` where the HMAC is over `<ref>` with the
-  admitting API key's secret (so a client can't attribute a call to
-  someone else's key). `ref` is the employer's own id — email, employee
-  number, whatever; opaque to us.
-* **Store:** `call_ledger.user_ref TEXT`, `call_ledger.user_label TEXT`
-  (optional display name the integration passes).
+* **Wire:** `/ws/capture?user=<ref>&user_label=<name>` **or** header
+  `X-RingFence-User: <ref>`. `ref` is the employer's own id (email,
+  employee number, …), opaque to us and capped at 200 chars. No signature
+  is needed: the tenant comes from the API key, so a client can only
+  mis-label calls *within its own tenant's data*.
+* **Store:** `call_ledger.user_ref` / `call_ledger.user_label` (added via
+  `ALTER TABLE … ADD COLUMN IF NOT EXISTS`, so an already-migrated
+  `call_ledger` is patched in place).
 * **Endpoints:** `GET /calls?user=<ref>` filter; `GET /calls/users` —
-  distinct `user_ref` for the tenant with call counts + peak-state mix.
-* **Console:** a "group by employee" toggle on the Calls list, and an
-  employee drill-down (their calls + a peak-state histogram). For a
-  non-admin token, `/calls` defaults to `user=<their own ref>` — but see
-  Phase 4 for how "their own ref" is resolved (until then: admin/operator
-  only, as today).
-* **Tests:** signed-vs-unsigned `user` header; `/calls?user=` filter;
-  `users` aggregation; a spoofed HMAC is rejected.
+  per-employee roll-up (`calls`, `alerts`, `interventions`, `peak_state`,
+  `last_at`), newest activity first. Both admin/operator.
+* **Console:** the Calls tab gets an **All calls / By employee** switch,
+  an employee-id filter box, and an `employee` column; a row in the
+  by-employee view drills into that person's calls.
+* **Deferred to Phase 4:** resolving "*my* calls" for a non-admin token
+  (needs identity accounts linked to `user_ref`). Until then `/calls` is
+  admin/operator only, as in Phase 1.
 
 ## Phase 3 — threaded review
 

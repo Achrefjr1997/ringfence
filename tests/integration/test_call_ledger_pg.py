@@ -47,15 +47,33 @@ def test_open_score_close_round_trip(ledger: PgCallLedger) -> None:
 
 
 def test_list_filters_and_scopes(ledger: PgCallLedger) -> None:
-    ledger.open("a", tenant="acme", api_key_id="k1", started_at=100.0)
-    ledger.open("b", tenant="acme", api_key_id="k2", started_at=200.0)
+    ledger.open("a", tenant="acme", api_key_id="k1", user_ref="alice", started_at=100.0)
+    ledger.open("b", tenant="acme", api_key_id="k2", user_ref="bob", started_at=200.0)
     ledger.open("c", tenant="other", api_key_id="k1", started_at=300.0)
     ledger.record_score("b", t=1.0, score=90.0, state="INTERVENE")
 
     assert {r.session_id for r in ledger.list("acme")} == {"a", "b"}
     assert [r.session_id for r in ledger.list("acme", api_key_id="k1")] == ["a"]
+    assert [r.session_id for r in ledger.list("acme", user_ref="bob")] == ["b"]
     assert [r.session_id for r in ledger.list("acme", min_state="ALERT")] == ["b"]
     assert {r.session_id for r in ledger.list("acme", since=150.0)} == {"b"}
+
+
+def test_user_summaries_group_by_employee(ledger: PgCallLedger) -> None:
+    ledger.open("a", tenant="acme", api_key_id="k1", user_ref="alice", started_at=100.0)
+    ledger.open(
+        "b", tenant="acme", api_key_id="k1", user_ref="alice", user_label="Alice", started_at=400.0
+    )
+    ledger.open("c", tenant="acme", api_key_id="k1", user_ref="bob", started_at=200.0)
+    ledger.open("d", tenant="acme", api_key_id="k1", started_at=300.0)  # unattributed
+    ledger.record_score("b", t=1.0, score=88.0, state="INTERVENE")
+    ledger.record_score("c", t=1.0, score=60.0, state="ALERT")
+
+    s = {u.user_ref: u for u in ledger.user_summaries("acme")}
+    assert set(s) == {"alice", "bob"}
+    assert s["alice"].calls == 2 and s["alice"].user_label == "Alice"
+    assert s["alice"].interventions == 1 and s["alice"].peak_state == "INTERVENE"
+    assert s["bob"].alerts == 1 and s["bob"].peak_state == "ALERT"
 
 
 def test_scores_are_wiped_with_the_call(ledger: PgCallLedger) -> None:

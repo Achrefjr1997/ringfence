@@ -65,6 +65,45 @@ def test_list_filters_by_key_time_and_state() -> None:
     assert len(lg.list("acme", limit=1)) == 1
 
 
+def test_user_ref_round_trips_and_filters() -> None:
+    lg = _ledger()
+    lg.open(
+        "a",
+        tenant="acme",
+        api_key_id="k1",
+        user_ref="alice@corp",
+        user_label="Alice",
+        started_at=100.0,
+    )
+    lg.open("b", tenant="acme", api_key_id="k1", user_ref="bob@corp", started_at=200.0)
+    lg.open("c", tenant="acme", api_key_id="k1", started_at=300.0)  # no user
+
+    assert lg.get("a").user_ref == "alice@corp" and lg.get("a").user_label == "Alice"  # type: ignore[union-attr]
+    assert [r.session_id for r in lg.list("acme", user_ref="alice@corp")] == ["a"]
+    assert {r.session_id for r in lg.list("acme")} == {"a", "b", "c"}
+
+
+def test_user_summaries_roll_up_per_employee() -> None:
+    lg = _ledger()
+    lg.open("a", tenant="acme", api_key_id="k1", user_ref="alice", started_at=100.0)
+    lg.open(
+        "b", tenant="acme", api_key_id="k1", user_ref="alice", user_label="Alice", started_at=400.0
+    )
+    lg.open("c", tenant="acme", api_key_id="k1", user_ref="bob", started_at=200.0)
+    lg.open("d", tenant="acme", api_key_id="k1", started_at=300.0)  # unattributed -> excluded
+    lg.record_score("b", t=1.0, score=85.0, state="INTERVENE")
+    lg.record_score("c", t=1.0, score=60.0, state="ALERT")
+
+    s = {u.user_ref: u for u in lg.user_summaries("acme")}
+    assert set(s) == {"alice", "bob"}
+    assert s["alice"].calls == 2 and s["alice"].user_label == "Alice"
+    assert s["alice"].alerts == 1 and s["alice"].interventions == 1
+    assert s["alice"].peak_state == "INTERVENE"
+    assert s["bob"].alerts == 1 and s["bob"].interventions == 0 and s["bob"].peak_state == "ALERT"
+    # newest activity first
+    assert [u.user_ref for u in lg.user_summaries("acme")] == ["alice", "bob"]
+
+
 def test_list_rows_carry_no_score_series_but_get_does() -> None:
     lg = _ledger()
     lg.open("s1", tenant="acme", api_key_id="k1", started_at=0.0)

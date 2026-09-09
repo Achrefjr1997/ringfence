@@ -93,9 +93,36 @@ def test_call_detail_returns_the_score_series_shape(client: TestClient) -> None:
     assert client.get("/calls/nope", headers=_h(token)).status_code == 404
 
 
+def test_calls_are_attributed_to_the_employee_the_integration_names(client: TestClient) -> None:
+    token, _ = _admin(client)
+    key = client.post("/orgs/keys", json={"name": "gw"}, headers=_h(token)).json()
+    # one call via ?user=, one via the X-RingFence-User header
+    with client.websocket_connect(
+        f"/ws/capture?session=u1&leg=far&key={key['key']}&user=alice@corp&user_label=Alice"
+    ) as ws:
+        ws.send_bytes(b"\x00\x00" * 160)
+    with client.websocket_connect(
+        f"/ws/capture?session=u2&leg=far&key={key['key']}",
+        headers={"X-RingFence-User": "bob@corp"},
+    ) as ws:
+        ws.send_bytes(b"\x00\x00" * 160)
+
+    rows = {c["session_id"]: c for c in client.get("/calls", headers=_h(token)).json()}
+    assert rows["u1"]["user_ref"] == "alice@corp" and rows["u1"]["user_label"] == "Alice"
+    assert rows["u2"]["user_ref"] == "bob@corp"
+
+    only_alice = client.get("/calls?user=alice@corp", headers=_h(token)).json()
+    assert {c["session_id"] for c in only_alice} == {"u1"}
+
+    users = {u["user_ref"]: u for u in client.get("/calls/users", headers=_h(token)).json()}
+    assert set(users) == {"alice@corp", "bob@corp"}
+    assert users["alice@corp"]["calls"] == 1 and users["alice@corp"]["user_label"] == "Alice"
+
+
 def test_calls_require_auth(client: TestClient) -> None:
     assert client.get("/calls").status_code == 401
     assert client.get("/calls/x").status_code == 401
+    assert client.get("/calls/users").status_code == 401
 
 
 def test_bad_state_filter_is_rejected(client: TestClient) -> None:

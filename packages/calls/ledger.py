@@ -1,4 +1,4 @@
-"""Call ledger -- the backbone of the oversight console (P1).
+"""Call ledger -- the backbone of the oversight console (P1 + P2).
 
 One :class:`CallRecord` per capture session (opened when the socket is
 admitted, closed when the last leg drops) plus a :class:`ScorePoint` per
@@ -6,10 +6,10 @@ decision, so the console can list *every* call and draw its escalation
 graph -- not only the ALERT+ calls that open a Case.
 
 Metadata only: session id, tenant, the API key the session was admitted
-with, start/end, peak state + score, leg/turn counts. Transcript and audio
-live in their own stores behind ``RF_RETAIN_TRANSCRIPTS`` /
-``RF_RETAIN_AUDIO``; nothing here is gated because none of it is call
-content.
+with, the employee reference the integration passed (``user_ref``),
+start/end, peak state + score, leg/turn counts. Transcript and audio live
+in their own stores behind ``RF_RETAIN_TRANSCRIPTS`` / ``RF_RETAIN_AUDIO``;
+nothing here is gated because none of it is call content.
 
 ``CallLedger`` is a sync Protocol with an in-memory default and a Postgres
 implementation (:class:`~packages.calls.pg_ledger.PgCallLedger`), same
@@ -47,6 +47,8 @@ class CallRecord:
     api_key_id: str | None
     started_at: float
     ended_at: float | None = None
+    user_ref: str | None = None
+    user_label: str | None = None
     peak_state: State = "CALM"
     peak_score: float = 0.0
     leg_count: int = 0
@@ -58,6 +60,19 @@ class CallRecord:
         return (self.ended_at - self.started_at) if self.ended_at else 0.0
 
 
+@dataclass(frozen=True, slots=True)
+class UserCallSummary:
+    """One employee's roll-up for the "group by employee" view."""
+
+    user_ref: str
+    user_label: str | None
+    calls: int
+    alerts: int  # calls whose peak reached ALERT+
+    interventions: int  # calls whose peak reached INTERVENE
+    last_at: float
+    peak_state: State  # highest peak across the window
+
+
 class CallLedger(Protocol):
     def open(
         self,
@@ -65,6 +80,8 @@ class CallLedger(Protocol):
         *,
         tenant: str,
         api_key_id: str | None,
+        user_ref: str | None = None,
+        user_label: str | None = None,
         started_at: float | None = None,
     ) -> None: ...
 
@@ -81,11 +98,18 @@ class CallLedger(Protocol):
 
     def get(self, session_id: str) -> CallRecord | None: ...
 
+    def user_summaries(
+        self, tenant: str, *, since: float | None = None
+    ) -> list[UserCallSummary]: ...
+
+    # `list` shadows the builtin in class scope -- keep it last so no later
+    # annotation resolves `list[...]` to the method (see PgCaseStore).
     def list(
         self,
         tenant: str,
         *,
         api_key_id: str | None = None,
+        user_ref: str | None = None,
         since: float | None = None,
         until: float | None = None,
         min_state: State | None = None,
@@ -95,6 +119,27 @@ class CallLedger(Protocol):
 
 def _peak(a: State, b: State) -> State:
     return a if _ORDER[a] >= _ORDER[b] else b
+
+
+def _summarise(rows: list[CallRecord]) -> list[UserCallSummary]:
+    by: dict[str, list[CallRecord]] = {}
+    for c in rows:
+        if c.user_ref:
+            by.setdefault(c.user_ref, []).append(c)
+    out = [
+        UserCallSummary(
+            user_ref=ref,
+            user_label=next((c.user_label for c in cs if c.user_label), None),
+            calls=len(cs),
+            alerts=sum(1 for c in cs if _ORDER[c.peak_state] >= _ORDER["ALERT"]),
+            interventions=sum(1 for c in cs if _ORDER[c.peak_state] >= _ORDER["INTERVENE"]),
+            last_at=max(c.started_at for c in cs),
+            peak_state=max((c.peak_state for c in cs), key=lambda s: _ORDER[s]),
+        )
+        for ref, cs in by.items()
+    ]
+    out.sort(key=lambda u: u.last_at, reverse=True)
+    return out
 
 
 class InMemoryCallLedger:
@@ -108,6 +153,8 @@ class InMemoryCallLedger:
         *,
         tenant: str,
         api_key_id: str | None,
+        user_ref: str | None = None,
+        user_label: str | None = None,
         started_at: float | None = None,
     ) -> None:
         if session_id in self._calls:
@@ -116,6 +163,8 @@ class InMemoryCallLedger:
             session_id=session_id,
             tenant=tenant,
             api_key_id=api_key_id,
+            user_ref=user_ref or None,
+            user_label=user_label or None,
             started_at=started_at if started_at is not None else time.time(),
         )
         self._scores[session_id] = []
@@ -155,11 +204,22 @@ class InMemoryCallLedger:
             return None
         return replace(cur, scores=tuple(self._scores.get(session_id, ())))
 
+    def user_summaries(self, tenant: str, *, since: float | None = None) -> list[UserCallSummary]:
+        return _summarise(
+            [
+                c
+                for c in self._calls.values()
+                if c.tenant == tenant and (since is None or c.started_at >= since)
+            ]
+        )
+
+    # keep `list` last -- see the note on the Protocol
     def list(
         self,
         tenant: str,
         *,
         api_key_id: str | None = None,
+        user_ref: str | None = None,
         since: float | None = None,
         until: float | None = None,
         min_state: State | None = None,
@@ -171,6 +231,7 @@ class InMemoryCallLedger:
             for c in self._calls.values()
             if c.tenant == tenant
             and (api_key_id is None or c.api_key_id == api_key_id)
+            and (user_ref is None or c.user_ref == user_ref)
             and (since is None or c.started_at >= since)
             and (until is None or c.started_at < until)
             and _ORDER[c.peak_state] >= floor
