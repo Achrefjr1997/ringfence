@@ -126,6 +126,28 @@ def test_private_flag_and_shares() -> None:
     assert lg.shares("ghost") == []
 
 
+def test_audio_key_set_clear_and_expiry() -> None:
+    lg = _ledger()
+    lg.open("s1", tenant="acme", api_key_id="k1", started_at=0.0)
+    lg.open("s2", tenant="acme", api_key_id="k1", started_at=0.0)
+    lg.set_audio("s1", key="acme/2026-01/s1.opus", size=1234, retain_until=100.0)
+    lg.set_audio("s2", key="acme/2026-01/s2.opus", size=99, retain_until=500.0)
+
+    rec = lg.get("s1")
+    assert rec.audio_key == "acme/2026-01/s1.opus" and rec.audio_bytes == 1234  # type: ignore[union-attr]
+
+    # only s1 has aged out at t=200
+    assert lg.expired_audio(200.0) == [("s1", "acme/2026-01/s1.opus")]
+    assert lg.expired_audio(600.0) == [
+        ("s1", "acme/2026-01/s1.opus"),
+        ("s2", "acme/2026-01/s2.opus"),
+    ]
+
+    lg.clear_audio("s1")
+    assert lg.get("s1").audio_key is None  # type: ignore[union-attr]
+    assert lg.expired_audio(600.0) == [("s2", "acme/2026-01/s2.opus")]
+
+
 def test_list_rows_carry_no_score_series_but_get_does() -> None:
     lg = _ledger()
     lg.open("s1", tenant="acme", api_key_id="k1", started_at=0.0)

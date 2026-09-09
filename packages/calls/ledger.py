@@ -54,6 +54,9 @@ class CallRecord:
     leg_count: int = 0
     turn_count: int = 0
     private: bool = False  # P4: hidden from managers (owner + shares + admin only)
+    audio_key: str | None = None  # P7: object-store key of the recording, if kept
+    audio_bytes: int | None = None
+    audio_retain_until: float | None = None
     scores: tuple[ScorePoint, ...] = ()
 
     @property
@@ -106,6 +109,12 @@ class CallLedger(Protocol):
     def unshare(self, session_id: str, user_id: str) -> None: ...
 
     def shares(self, session_id: str) -> list[str]: ...
+
+    def set_audio(self, session_id: str, *, key: str, size: int, retain_until: float) -> None: ...
+
+    def clear_audio(self, session_id: str) -> None: ...
+
+    def expired_audio(self, now: float) -> list[tuple[str, str]]: ...
 
     def user_summaries(
         self, tenant: str, *, since: float | None = None
@@ -228,6 +237,27 @@ class InMemoryCallLedger:
 
     def shares(self, session_id: str) -> list[str]:
         return sorted(self._shares.get(session_id, set()))
+
+    def set_audio(self, session_id: str, *, key: str, size: int, retain_until: float) -> None:
+        cur = self._calls.get(session_id)
+        if cur is not None:
+            self._calls[session_id] = replace(
+                cur, audio_key=key, audio_bytes=size, audio_retain_until=retain_until
+            )
+
+    def clear_audio(self, session_id: str) -> None:
+        cur = self._calls.get(session_id)
+        if cur is not None:
+            self._calls[session_id] = replace(
+                cur, audio_key=None, audio_bytes=None, audio_retain_until=None
+            )
+
+    def expired_audio(self, now: float) -> list[tuple[str, str]]:
+        return [
+            (c.session_id, c.audio_key)
+            for c in self._calls.values()
+            if c.audio_key and c.audio_retain_until is not None and c.audio_retain_until <= now
+        ]
 
     def user_summaries(self, tenant: str, *, since: float | None = None) -> list[UserCallSummary]:
         return _summarise(

@@ -40,6 +40,7 @@ from apps.gateway.call_recorder import CallLedgerRecorder, TranscriptRecorder
 from apps.gateway.guardian import GuardianDispatcher
 from apps.gateway.orgs import build_org_routes
 from apps.gateway.ratelimit import RateLimiter, RateLimitMiddleware
+from apps.gateway.tokens import read_token
 from packages.asr.null import NullASR
 from packages.asr.provider import ASRProvider, StreamSpec
 from packages.asr.router import ASRRouter
@@ -55,6 +56,7 @@ from packages.calls.comments import (
     CommentStore,
     InMemoryCommentStore,
 )
+from packages.calls import audio as _audio
 from packages.calls.ledger import CallLedger, CallRecord, InMemoryCallLedger
 from packages.calls.transcripts import InMemoryTranscriptStore, TranscriptStore
 from packages.contracts.audio import Frame, LegSpec, Mode, RoleHint, SessionDescriptor
@@ -70,6 +72,7 @@ from packages.policy.pack import PolicyPack, load_pack
 from packages.policy.tenants import TenantRegistry, load_tenants, tenant_pattern
 from packages.risk.judge import Judge
 from packages.session.manager import SessionManager
+from packages.storage.objectstore import LocalFsObjectStore, ObjectStore
 
 log = logging.getLogger("ringfence.gateway")
 
@@ -189,6 +192,8 @@ class _Live:
     seen_legs: set[str] = field(default_factory=set)  # every leg id ever attached
     api_key_id: str | None = None  # the key this session was admitted with, if any
     user_ref: str | None = None  # the employee the integration attributed this call to
+    retain_audio: bool = False  # P7: tee PCM to disk for this session
+    audio_buf: dict[str, bytearray] = field(default_factory=dict)  # leg -> raw PCM16
 
 
 def _serialise_case(case: Case) -> dict[str, object]:
@@ -237,6 +242,8 @@ def _serialise_call(rec: CallRecord, *, with_scores: bool = False) -> dict[str, 
         "peak_score": round(rec.peak_score, 1),
         "leg_count": rec.leg_count,
         "private": rec.private,
+        "audio": rec.audio_key is not None,
+        "audio_bytes": rec.audio_bytes,
         "live": rec.ended_at is None,
     }
     if with_scores:
@@ -294,6 +301,7 @@ def create_app(
     comment_store: CommentStore | None = None,
     audit_log: AuditLog | None = None,
     transcript_store: TranscriptStore | None = None,
+    object_store: ObjectStore | None = None,
     billing_provider: BillingProvider | None = None,
     asr: ASRProvider | None = None,
     guardian_dispatcher: GuardianDispatcher | None = None,
@@ -388,6 +396,18 @@ def create_app(
         on_shutdown.append(pg_transcripts.close_pool)
     else:
         the_transcripts = InMemoryTranscriptStore()
+
+    # P7 audio recording -- a store is stood up only when the global
+    # RF_RETAIN_AUDIO switch is on (or a store is injected, for tests); a
+    # tenant still has to opt in per session. Fails loud if Opus is missing.
+    _s = get_settings()
+    _opus_ok = _audio.opus_available()
+    if _s.retain_audio and not _opus_ok:
+        log.error("RF_RETAIN_AUDIO is set but Ogg/Opus is unavailable — audio recording disabled")
+    the_store: ObjectStore | None = object_store
+    if the_store is None and _s.retain_audio and _opus_ok:
+        the_store = LocalFsObjectStore(_s.audio_store_root)
+    audio_retain_s = max(1, _s.audio_retention_days) * 86400.0
 
     the_secret = session_secret or get_settings().session_secret
     if not the_secret:
@@ -819,6 +839,53 @@ def create_app(
         body["transcript"] = [{"role": r, "text": t, "t": ts} for (r, t, ts) in turns]
         return JSONResponse(body)
 
+    async def get_call_audio(request: Request) -> Response:
+        """Stream the stored recording (P7). Access-checked like the call
+        detail; every play/download is written to the audit log. Supports
+        HTTP Range so the browser <audio> element can seek.
+        """
+        user, err = case_access(request)
+        if err is not None:
+            # let a login token in the query string through, so a plain
+            # <audio src> works from the console without an API key
+            tok = request.query_params.get("token")
+            claims = read_token(tok, secret=the_secret) if tok else None
+            user = the_identity.get_user(claims.user_id) if claims else None
+            if user is None or user.role not in _CASE_ROLES:
+                return err
+        rec = the_ledger.get(request.path_params["session_id"])
+        tenant = _calls_tenant(request, user)
+        if rec is None or (tenant is not None and rec.tenant != tenant):
+            return JSONResponse({"error": "no such call"}, status_code=404)
+        v = _viewer(user, rec.tenant)
+        if not (_can_see(rec, v) or _mentioned_on(rec.session_id, v[0])):
+            return JSONResponse({"error": "no such call"}, status_code=404)
+        if the_store is None or rec.audio_key is None:
+            return JSONResponse({"error": "no recording"}, status_code=404)
+        size = the_store.size(rec.audio_key)
+        if size is None:
+            return JSONResponse({"error": "no recording"}, status_code=404)
+
+        download = request.query_params.get("download") == "1"
+        _audit(request, rec.session_id, rec.tenant, user, "download" if download else "play")
+        hdrs = {"Accept-Ranges": "bytes", "Content-Type": _audio.CONTENT_TYPE}
+        if download:
+            hdrs["Content-Disposition"] = f'attachment; filename="{rec.session_id}.opus"'
+
+        rng = request.headers.get("range", "")
+        if rng.startswith("bytes="):
+            spec = rng[6:].split(",")[0].strip()
+            lo_s, _, hi_s = spec.partition("-")
+            lo = int(lo_s) if lo_s else 0
+            hi = int(hi_s) if hi_s else size - 1
+            lo, hi = max(0, lo), min(hi, size - 1)
+            if lo > hi:
+                return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+            chunk = the_store.read_range(rec.audio_key, lo, hi - lo + 1)
+            hdrs["Content-Range"] = f"bytes {lo}-{hi}/{size}"
+            return Response(chunk, status_code=206, headers=hdrs)
+        return Response(the_store.get(rec.audio_key) or b"", headers=hdrs)
+
     def _owned_call(request: Request, user: User | None) -> CallRecord | JSONResponse:
         """The call, if the caller may *manage* it (admin or the owner)."""
         rec = the_ledger.get(request.path_params["session_id"])
@@ -1101,6 +1168,7 @@ def create_app(
                 started_at=time.time(),
                 api_key_id=key_id,
                 user_ref=user_ref or None,
+                retain_audio=(the_store is not None and the_tenants.get(tenant).retain_audio),
             )
             sessions[session] = live
             metrics.admitted += 1
@@ -1124,6 +1192,8 @@ def create_app(
                     break
                 data = msg.get("bytes")
                 if data:
+                    if live.retain_audio:
+                        live.audio_buf.setdefault(leg, bytearray()).extend(data)
                     await live.pipeline.feed(
                         Frame(
                             session_id=session,
@@ -1157,6 +1227,19 @@ def create_app(
                     )
                 with contextlib.suppress(Exception):
                     the_ledger.close(session, ended_at=closed_at, leg_count=len(live.seen_legs))
+                if live.retain_audio and the_store is not None and any(live.audio_buf.values()):
+                    with contextlib.suppress(Exception):
+                        mixed = _audio.mix_legs([bytes(b) for b in live.audio_buf.values()])
+                        blob, _ct = _audio.encode_opus(mixed)
+                        month = time.strftime("%Y-%m", time.gmtime(live.started_at))
+                        key = f"{live.tenant}/{month}/{session}.opus"
+                        the_store.put(key, blob)
+                        the_ledger.set_audio(
+                            session,
+                            key=key,
+                            size=len(blob),
+                            retain_until=closed_at + audio_retain_s,
+                        )
 
     async def usage(request: Request) -> JSONResponse:
         user, err = case_access(request)
@@ -1199,6 +1282,7 @@ def create_app(
         Route("/calls/{session_id}", set_call_private, methods=["PATCH"]),
         Route("/calls/{session_id}/share", share_call, methods=["POST"]),
         Route("/calls/{session_id}/share/{user_id}", unshare_call, methods=["DELETE"]),
+        Route("/calls/{session_id}/audio", get_call_audio),
         Route("/calls/{session_id}/access-log", list_call_access),
         Route("/audit", list_audit),
         Route("/calls/{session_id}/comments", list_comments),
@@ -1235,12 +1319,22 @@ def create_app(
     # per-call transcript: buffer rf.*.turn, flush on close (RF_RETAIN_TRANSCRIPTS)
     transcriber = TranscriptRecorder(the_transcripts)
 
+    async def _audio_retention_sweep() -> None:
+        """Hourly: drop recordings past their retain-until (P7)."""
+        while the_store is not None:
+            with contextlib.suppress(Exception):
+                for sid, key in the_ledger.expired_audio(time.time()):
+                    the_store.delete(key)
+                    the_ledger.clear_audio(sid)
+            await asyncio.sleep(3600)
+
     @contextlib.asynccontextmanager
     async def _lifespan(_: Starlette) -> AsyncIterator[None]:
         tasks = [
             asyncio.create_task(guardian.run(the_bus)),
             asyncio.create_task(recorder.run(the_bus)),
             asyncio.create_task(transcriber.run(the_bus)),
+            asyncio.create_task(_audio_retention_sweep()),
         ]
         try:
             yield
@@ -1265,6 +1359,7 @@ def create_app(
     app.state.comment_store = the_comments_store
     app.state.audit_log = the_audit
     app.state.transcript_store = the_transcripts
+    app.state.object_store = the_store
     app.state.asr_router = the_router
     app.state.guardian = guardian
     return app

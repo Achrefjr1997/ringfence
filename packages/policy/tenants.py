@@ -27,6 +27,9 @@ class TenantConfig(BaseModel):
     # name of the env var holding this tenant's HMAC secret -- never the
     # secret itself (tenants.yaml is committed). No secret => no webhook.
     guardian_webhook_secret_env: str | None = None
+    # P7: keep call recordings for this tenant. Only takes effect when the
+    # global RF_RETAIN_AUDIO is also on. Requires a legal basis + DPA.
+    retain_audio: bool = False
 
 
 def event_subject(tenant_id: str, *parts: str) -> str:

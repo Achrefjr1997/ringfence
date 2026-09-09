@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     policy_pack_path: Path = Path("config/policy/default.yaml")
     dry_run: bool = True
     retain_transcripts: bool = False
+    # P7 audio recording: global master switch (off), plus a per-tenant
+    # opt-in in config/tenants.yaml. Needs a legal basis + DPA -- see
+    # docs/LEGAL_AUDIO.md. Recordings are swept `audio_retention_days` old.
+    retain_audio: bool = False
+    audio_retention_days: int = 7
+    audio_store_root: str = "data/audio"  # LocalFsObjectStore root
     asr_provider: Literal["assemblyai", "null"] = "null"
     log_level: str = "INFO"
     log_format: Literal["json", "text"] = "json"  # structured logs by default (T-7.5)

@@ -18,6 +18,8 @@ def test_schema_declares_both_tables_and_is_idempotent() -> None:
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
     assert "private BOOLEAN NOT NULL DEFAULT FALSE" in sql  # P4 alter
+    for col in ("audio_key", "audio_bytes", "audio_retain_until"):  # P7 alters
+        assert f"ADD COLUMN IF NOT EXISTS {col}" in sql
     # P5: the audit trail outlives the ledger row -- no cascade off it
     audit = sql[sql.index("call_access_log") : sql.index("call_access_log_session_idx")]
     assert "REFERENCES" not in audit and "CASCADE" not in audit

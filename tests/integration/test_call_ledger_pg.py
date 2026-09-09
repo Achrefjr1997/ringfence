@@ -29,7 +29,9 @@ def ledger() -> Iterator[PgCallLedger]:
 
 async def _truncate(lg: PgCallLedger) -> None:
     async with lg._pool.acquire() as conn:
-        await conn.execute("TRUNCATE call_ledger, call_scores, call_comments CASCADE")
+        await conn.execute(
+            "TRUNCATE call_ledger, call_scores, call_comments, call_transcript CASCADE"
+        )
 
 
 def test_open_score_close_round_trip(ledger: PgCallLedger) -> None:
@@ -82,6 +84,22 @@ def test_scores_are_wiped_with_the_call(ledger: PgCallLedger) -> None:
     ledger._run(_delete_call(ledger, "s1"))
     async_rows = ledger._run(_count_scores(ledger, "s1"))
     assert async_rows == 0
+
+
+def test_audio_key_round_trips_and_expiry_query(ledger: PgCallLedger) -> None:
+    ledger.open("s1", tenant="acme", api_key_id="k1", started_at=0.0)
+    ledger.open("s2", tenant="acme", api_key_id="k1", started_at=0.0)
+    ledger.set_audio("s1", key="acme/2026-01/s1.opus", size=1234, retain_until=100.0)
+    ledger.set_audio("s2", key="acme/2026-01/s2.opus", size=99, retain_until=999.0)
+
+    rec = ledger.get("s1")
+    assert rec is not None and rec.audio_key == "acme/2026-01/s1.opus"
+    assert rec.audio_bytes == 1234
+
+    assert ledger.expired_audio(200.0) == [("s1", "acme/2026-01/s1.opus")]
+    ledger.clear_audio("s1")
+    assert ledger.get("s1").audio_key is None  # type: ignore[union-attr]
+    assert ledger.expired_audio(2000.0) == [("s2", "acme/2026-01/s2.opus")]
 
 
 async def _delete_call(lg: PgCallLedger, sid: str) -> None:

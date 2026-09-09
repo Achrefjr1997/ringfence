@@ -58,6 +58,14 @@ def test_everything_restarts_and_state_is_on_volumes(prod: dict) -> None:
     assert any("pg_data:" in v for v in prod["services"]["postgres"]["volumes"])
 
 
+def test_p7_audio_recording_is_off_by_default_with_its_own_volume(prod: dict) -> None:
+    env = prod["services"]["gateway"]["environment"]
+    assert env["RF_RETAIN_AUDIO"] == "${RF_RETAIN_AUDIO:-false}"  # opt-in, legal-gated
+    assert "RF_AUDIO_RETENTION_DAYS" in env
+    assert any("call_audio:" in v for v in prod["services"]["gateway"]["volumes"])
+    assert "call_audio" in prod["volumes"]
+
+
 def test_grafana_is_internal_and_provisions_itself(prod: dict) -> None:
     g = prod["services"]["grafana"]
     assert g["image"] == "grafana/grafana:11.4.0"  # pinned
