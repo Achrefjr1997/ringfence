@@ -17,7 +17,9 @@ import logging
 from typing import Any
 
 from packages.calls.ledger import CallLedger
+from packages.calls.transcripts import TranscriptStore, Turn
 from packages.contracts.risk import State
+from packages.contracts.settings import get_settings
 
 log = logging.getLogger("ringfence.call_recorder")
 
@@ -49,3 +51,56 @@ class CallLedgerRecorder:
 
 def _as_state(s: object) -> State:
     return s if s in _STATES else "CALM"  # type: ignore[return-value]
+
+
+_REPLAY_TENANT = "replay"
+
+
+class TranscriptRecorder:
+    """Buffers ``rf.*.turn`` per session and, on ``rf.*.session.closed``,
+    flushes the whole transcript to the store -- **only** when
+    ``RF_RETAIN_TRANSCRIPTS=true`` (invariant #5). The buffer is always
+    cleared on close, retained or not.
+    """
+
+    def __init__(self, store: TranscriptStore) -> None:
+        self._store = store
+        self._buf: dict[str, list[Turn]] = {}
+        self._tenant: dict[str, str] = {}
+
+    async def run(self, bus: Any) -> None:
+        async with contextlib.aclosing(bus.subscribe("rf.*")) as stream:
+            async for subject, payload in stream:
+                with contextlib.suppress(Exception):
+                    if subject.endswith(".turn"):
+                        self._on_turn(subject, payload)
+                    elif subject.endswith(".session.closed"):
+                        self._on_closed(str(payload.get("session_id", "")))
+
+    def _tenant_of(self, subject: str) -> str:
+        parts = subject.split(".")
+        return parts[1] if len(parts) > 2 else ""
+
+    def _on_turn(self, subject: str, payload: dict[str, Any]) -> None:
+        sid = str(payload.get("session_id", ""))
+        if not sid:
+            return
+        tenant = self._tenant_of(subject)
+        if tenant == _REPLAY_TENANT:
+            return
+        self._tenant[sid] = tenant
+        self._buf.setdefault(sid, []).append(
+            (
+                str(payload.get("role", "UNKNOWN")),
+                str(payload.get("text", "")),
+                float(payload.get("t_end", payload.get("t_start", 0.0))),
+            )
+        )
+
+    def _on_closed(self, session_id: str) -> None:
+        turns = self._buf.pop(session_id, None)
+        tenant = self._tenant.pop(session_id, "")
+        if not turns:
+            return
+        if get_settings().retain_transcripts:
+            self._store.save(session_id, tenant, turns)

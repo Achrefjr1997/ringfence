@@ -92,3 +92,14 @@ CREATE TABLE IF NOT EXISTS call_access_log (
 
 CREATE INDEX IF NOT EXISTS call_access_log_session_idx ON call_access_log (session_id, at DESC);
 CREATE INDEX IF NOT EXISTS call_access_log_tenant_idx ON call_access_log (tenant, at DESC);
+
+-- P6: per-call transcript -- written only when RF_RETAIN_TRANSCRIPTS=true
+-- (invariant #5; the gate is in TranscriptRecorder). Cascades with the call.
+CREATE TABLE IF NOT EXISTS call_transcript (
+    session_id TEXT             NOT NULL REFERENCES call_ledger (session_id) ON DELETE CASCADE,
+    seq        INTEGER          NOT NULL,
+    role       TEXT             NOT NULL,   -- CALLER | CALLEE | UNKNOWN
+    text       TEXT             NOT NULL,
+    t          DOUBLE PRECISION NOT NULL,   -- seconds into the call
+    PRIMARY KEY (session_id, seq)
+);

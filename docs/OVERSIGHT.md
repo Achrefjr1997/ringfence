@@ -15,7 +15,7 @@ comparable products do it (see *Prior art* at the end).
 | **3** | Threaded review (timestamped comments, @mention, visibility) | — | **shipped** (`feat/oversight-p3-comments`) |
 | **4** | RBAC hierarchy (own → team → org) + private calls + shares | — | **shipped** (`feat/oversight-p4-rbac`) |
 | **5** | Access audit log (who viewed / played / exported which call) | — | **shipped** (`feat/oversight-p5-audit`) |
-| **6** | Transcript retained for *every* call, not just ALERT+ cases | `RF_RETAIN_TRANSCRIPTS` (invariant #5) | planned |
+| **6** | Transcript retained for *every* call, not just ALERT+ cases | `RF_RETAIN_TRANSCRIPTS` (invariant #5) | **shipped** (`feat/oversight-p6-transcript`) |
 | **7** | Full-conversation audio: capture, storage, playback, retention | **T-7.0 legal basis + DPA** | planned |
 | **8** | Live wall (supervisor sees every active call) | — | planned |
 | **9** | Employee timeline + per-tenant retention controls | — | planned |
@@ -177,22 +177,24 @@ for Phase 7.
   `test_calls_gateway.py` — every read + mutation writes a row, admin-only,
   no delete route, `list` carries no session.
 
-## Phase 6 — transcript for every call
+## Phase 6 — transcript for every call *(shipped)*
 
 **Goal:** the transcript is available for calls that never reached ALERT
-(today only ALERT+ calls open a Case, and only then is the transcript
-kept).
+(before P6 only ALERT+ calls opened a Case, and only then was it kept).
 
-* **`call_transcript`**: `(session_id, seq, role, text, t)`. Written once
-  per session on close, **only when `RF_RETAIN_TRANSCRIPTS=true`**
-  (invariant #5 unchanged — the flag still governs disk).
-* `GET /calls/{sid}` returns the transcript whether or not a Case exists;
-  the Case transcript remains the source when there is one.
-* **Console:** transcript inline with the score chart on the call detail;
-  each turn's timestamp moves the playhead.
-* **Tests:** flag off → table stays empty, `/calls/{sid}` transcript is
-  `[]`, invariant suite green; flag on → round-trips.
-
+* **`packages/calls/transcripts.py`** — `TranscriptStore` sync Protocol
+  (`InMemoryTranscriptStore` + `PgTranscriptStore`). **`call_transcript`**
+  `(session_id, seq, role, text, t)`, cascades with the call.
+* **`TranscriptRecorder`** (`apps/gateway/call_recorder.py`) buffers
+  `rf.*.turn` per session and, on `rf.*.session.closed`, flushes the whole
+  transcript **only when `RF_RETAIN_TRANSCRIPTS=true`** (invariant #5 —
+  the gate lives in one place). The buffer is cleared on close either way;
+  `rf.replay.*` turns are ignored.
+* `GET /calls/{id}` now returns `the_transcripts.get(sid)`, falling back
+  to the Case transcript for calls captured before P6.
+* **Tests:** `test_call_transcripts.py`; `test_transcript_recorder.py`
+  (flag on → flushed, flag off → nothing, marked `invariant`);
+  `test_calls_gateway.py` — a non-Case call still serves its transcript.
 ## Phase 7 — full-conversation audio  *(T-7.0 legal gate)*
 
 **Goal:** play back the actual call for verification.
