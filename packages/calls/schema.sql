@@ -23,9 +23,21 @@ CREATE INDEX IF NOT EXISTS call_ledger_key_started_idx
 -- P2: added after call_ledger shipped, so patch an existing table too.
 ALTER TABLE call_ledger ADD COLUMN IF NOT EXISTS user_ref TEXT;
 ALTER TABLE call_ledger ADD COLUMN IF NOT EXISTS user_label TEXT;
+-- P4: a private call is hidden from managers (owner + shares + admin only).
+ALTER TABLE call_ledger ADD COLUMN IF NOT EXISTS private BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE INDEX IF NOT EXISTS call_ledger_user_started_idx
     ON call_ledger (tenant, user_ref, started_at DESC);
+
+-- P4: explicit per-call grants -- who a call was shared with, beyond the
+-- role/hierarchy rule.
+CREATE TABLE IF NOT EXISTS call_shares (
+    session_id       TEXT             NOT NULL REFERENCES call_ledger (session_id) ON DELETE CASCADE,
+    shared_with_user TEXT             NOT NULL,
+    shared_by        TEXT             NOT NULL,
+    shared_at        DOUBLE PRECISION NOT NULL,
+    PRIMARY KEY (session_id, shared_with_user)
+);
 
 -- One point per decision: the escalation graph the console draws. Kept for
 -- every call, not just ALERT+, so score/state only -- never call content.

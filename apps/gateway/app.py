@@ -47,6 +47,7 @@ from packages.billing.meter import BillingStore, InMemoryBillingStore
 from packages.billing.plans import get_plans
 from packages.billing.provider import BillingProvider, NullBilling
 from packages.billing.service import BillingService
+from packages.calls.access import can_view_call, in_scope, report_refs
 from packages.calls.comments import (
     Comment,
     CommentError,
@@ -233,6 +234,7 @@ def _serialise_call(rec: CallRecord, *, with_scores: bool = False) -> dict[str, 
         "peak_state": rec.peak_state,
         "peak_score": round(rec.peak_score, 1),
         "leg_count": rec.leg_count,
+        "private": rec.private,
         "live": rec.ended_at is None,
     }
     if with_scores:
@@ -601,6 +603,25 @@ def create_app(
             return user.org_id
         return request.query_params.get("tenant") or None
 
+    def _viewer(user: User | None, tenant: str) -> tuple[str, bool, str | None, frozenset[str]]:
+        """(id, is_admin, user_ref, team_refs) — dev/unauthed is an admin."""
+        if user is None:
+            return "dev", True, None, frozenset()
+        team = report_refs(the_identity.list_users(tenant), user.id)
+        return user.id, user.role == "admin", user.user_ref, team
+
+    def _can_see(rec: CallRecord, viewer: tuple[str, bool, str | None, frozenset[str]]) -> bool:
+        uid, is_admin, user_ref, _team = viewer
+        is_owner = rec.user_ref is not None and rec.user_ref == user_ref
+        is_shared = rec.private and uid in the_ledger.shares(rec.session_id)
+        return can_view_call(
+            is_admin=is_admin,
+            is_owner=is_owner,
+            is_shared=is_shared,
+            is_mentioned=False,
+            rec_private=rec.private,
+        )
+
     async def list_calls(request: Request) -> JSONResponse:
         user, err = case_access(request)
         if err is not None:
@@ -612,6 +633,9 @@ def create_app(
         state = q.get("state") or None
         if state is not None and state not in _STATE_NAMES:
             return JSONResponse({"error": "bad state"}, status_code=400)
+        scope = q.get("scope") or "all"
+        if scope not in ("mine", "team", "all"):
+            return JSONResponse({"error": "scope must be mine|team|all"}, status_code=400)
         try:
             rows = the_ledger.list(
                 tenant,
@@ -624,7 +648,20 @@ def create_app(
             )
         except ValueError:
             return JSONResponse({"error": "bad from/to/limit"}, status_code=400)
-        return JSONResponse([_serialise_call(r) for r in rows])
+        v = _viewer(user, tenant)
+        _uid, _adm, uref, team = v
+        out = [
+            r
+            for r in rows
+            if _can_see(r, v)
+            and in_scope(
+                scope,
+                is_owner=r.user_ref is not None and r.user_ref == uref,
+                owner_ref=r.user_ref,
+                team_refs=team,
+            )
+        ]
+        return JSONResponse([_serialise_call(r) for r in out])
 
     async def list_call_users(request: Request) -> JSONResponse:
         user, err = case_access(request)
@@ -654,6 +691,9 @@ def create_app(
             ]
         )
 
+    def _mentioned_on(session_id: str, uid: str) -> bool:
+        return any(uid in c.mentions for c in the_comments_store.list_for_call(session_id))
+
     async def get_call(request: Request) -> JSONResponse:
         user, err = case_access(request)
         if err is not None:
@@ -662,7 +702,12 @@ def create_app(
         tenant = _calls_tenant(request, user)
         if rec is None or (tenant is not None and rec.tenant != tenant):
             return JSONResponse({"error": "no such call"}, status_code=404)
+        v = _viewer(user, rec.tenant)
+        if not (_can_see(rec, v) or _mentioned_on(rec.session_id, v[0])):
+            return JSONResponse({"error": "no such call"}, status_code=404)
         body = _serialise_call(rec, with_scores=True)
+        body["shared_with"] = the_ledger.shares(rec.session_id)
+        body["can_manage"] = v[1] or (rec.user_ref is not None and rec.user_ref == v[2])
         case = the_cases.get(rec.session_id)
         if case is not None and (user is None or case.tenant == rec.tenant):
             body["transcript"] = [{"role": r, "text": t, "t": ts} for (r, t, ts) in case.transcript]
@@ -671,6 +716,54 @@ def create_app(
             body["transcript"] = []
             body["has_case"] = False
         return JSONResponse(body)
+
+    def _owned_call(request: Request, user: User | None) -> CallRecord | JSONResponse:
+        """The call, if the caller may *manage* it (admin or the owner)."""
+        rec = the_ledger.get(request.path_params["session_id"])
+        tenant = _calls_tenant(request, user)
+        if rec is None or (tenant is not None and rec.tenant != tenant):
+            return JSONResponse({"error": "no such call"}, status_code=404)
+        _uid, is_admin, uref, _team = _viewer(user, rec.tenant)
+        if not (is_admin or (rec.user_ref is not None and rec.user_ref == uref)):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        return rec
+
+    async def set_call_private(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        rec = _owned_call(request, user)
+        if isinstance(rec, JSONResponse):
+            return rec
+        private = bool((await read_json_body(request)).get("private", True))
+        the_ledger.set_private(rec.session_id, private)
+        got = the_ledger.get(rec.session_id)
+        return JSONResponse(_serialise_call(got) if got else {"private": private})
+
+    async def share_call(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        rec = _owned_call(request, user)
+        if isinstance(rec, JSONResponse):
+            return rec
+        body = await read_json_body(request)
+        target = the_identity.get_user_by_email(str(body.get("email", "")).strip().lower())
+        if target is None or target.org_id != rec.tenant:
+            return JSONResponse({"error": "no such user in this org"}, status_code=400)
+        by, _adm, _uref, _team = _viewer(user, rec.tenant)
+        the_ledger.share(rec.session_id, user_id=target.id, by=by)
+        return JSONResponse({"shared_with": the_ledger.shares(rec.session_id)})
+
+    async def unshare_call(request: Request) -> JSONResponse:
+        user, err = case_access(request)
+        if err is not None:
+            return err
+        rec = _owned_call(request, user)
+        if isinstance(rec, JSONResponse):
+            return rec
+        the_ledger.unshare(rec.session_id, request.path_params["user_id"])
+        return JSONResponse({"shared_with": the_ledger.shares(rec.session_id)})
 
     # -- threaded review comments (P3) ------------------------------
 
@@ -684,6 +777,9 @@ def create_app(
         rec = the_ledger.get(request.path_params["session_id"])
         tenant = _calls_tenant(request, user)
         if rec is None or (tenant is not None and rec.tenant != tenant):
+            return None
+        v = _viewer(user, rec.tenant)
+        if not (_can_see(rec, v) or _mentioned_on(rec.session_id, v[0])):
             return None
         return rec
 
@@ -945,6 +1041,9 @@ def create_app(
         Route("/calls", list_calls),
         Route("/calls/users", list_call_users),
         Route("/calls/{session_id}", get_call),
+        Route("/calls/{session_id}", set_call_private, methods=["PATCH"]),
+        Route("/calls/{session_id}/share", share_call, methods=["POST"]),
+        Route("/calls/{session_id}/share/{user_id}", unshare_call, methods=["DELETE"]),
         Route("/calls/{session_id}/comments", list_comments),
         Route("/calls/{session_id}/comments", add_comment, methods=["POST"]),
         Route("/calls/{session_id}/comments/{comment_id}", edit_comment, methods=["PATCH"]),

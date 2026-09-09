@@ -152,3 +152,24 @@ def test_set_password_set_verified_and_list_users(store: PgIdentityStore) -> Non
         store.set_password("nope", "x")
     with pytest.raises(IdentityError):
         store.set_verified("nope")
+
+
+def test_set_manager_and_user_ref_round_trip(store: PgIdentityStore) -> None:
+    org, admin = _org(store)
+    lead = store.add_user(
+        org_id=org.id, email="lead@acme.co", password="pw-11112222", role="operator"
+    )
+    rep = store.add_user(
+        org_id=org.id, email="rep@acme.co", password="pw-33334444", role="operator"
+    )
+
+    store.set_manager(rep.id, lead.id)
+    store.set_user_ref(rep.id, "rep-42")
+    got = store.get_user(rep.id)
+    assert got is not None and got.manager_id == lead.id and got.user_ref == "rep-42"
+
+    store.set_manager(rep.id, None)
+    assert store.get_user(rep.id).manager_id is None  # type: ignore[union-attr]
+
+    with pytest.raises(IdentityError):
+        store.set_manager(rep.id, rep.id)

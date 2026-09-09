@@ -197,3 +197,100 @@ def test_empty_comment_body_is_400(client: TestClient) -> None:
 def test_bad_state_filter_is_rejected(client: TestClient) -> None:
     token, _ = _admin(client)
     assert client.get("/calls?state=NOPE", headers=_h(token)).status_code == 400
+
+
+# -- P4: RBAC + private calls + shares ---------------------------------
+
+
+def _operator(client: TestClient, admin_token: str, email: str) -> tuple[str, str]:
+    r = client.post(
+        "/orgs/users", json={"email": email, "role": "operator"}, headers=_h(admin_token)
+    ).json()
+    acc = client.post(
+        "/auth/accept", json={"token": r["invite_token"], "password": "pw-abcdefgh"}
+    ).json()
+    return acc["token"], r["user_id"]
+
+
+def _call_as(client: TestClient, key: str, sid: str, *, user: str | None = None) -> None:
+    q = f"/ws/capture?session={sid}&leg=far&key={key}" + (f"&user={user}" if user else "")
+    with client.websocket_connect(q) as ws:
+        ws.send_bytes(b"\x00\x00" * 160)
+
+
+def test_private_call_is_hidden_until_shared(client: TestClient) -> None:
+    admin_token, _ = _admin(client)
+    key = client.post("/orgs/keys", json={"name": "gw"}, headers=_h(admin_token)).json()["key"]
+    op_token, op_id = _operator(client, admin_token, "op@acme.co")
+    _call_as(client, key, "p1", user="alice")
+
+    # operator sees it while it's public
+    assert {c["session_id"] for c in client.get("/calls", headers=_h(op_token)).json()} == {"p1"}
+    # admin marks it private
+    assert (
+        client.patch("/calls/p1", json={"private": True}, headers=_h(admin_token)).status_code
+        == 200
+    )
+    assert client.get("/calls", headers=_h(op_token)).json() == []
+    assert client.get("/calls/p1", headers=_h(op_token)).status_code == 404
+    # admin still sees it
+    assert client.get("/calls/p1", headers=_h(admin_token)).json()["private"] is True
+    # share it with the operator
+    client.post("/calls/p1/share", json={"email": "op@acme.co"}, headers=_h(admin_token))
+    seen = client.get("/calls/p1", headers=_h(op_token))
+    assert seen.status_code == 200 and op_id in seen.json()["shared_with"]
+    # unshare
+    client.delete(f"/calls/p1/share/{op_id}", headers=_h(admin_token))
+    assert client.get("/calls/p1", headers=_h(op_token)).status_code == 404
+
+
+def test_scope_mine_and_team(client: TestClient) -> None:
+    admin_token, _ = _admin(client)
+    key = client.post("/orgs/keys", json={"name": "gw"}, headers=_h(admin_token)).json()["key"]
+    lead_token, lead_id = _operator(client, admin_token, "lead@acme.co")
+    _rep_token, rep_id = _operator(client, admin_token, "rep@acme.co")
+    client.patch(f"/orgs/users/{lead_id}", json={"user_ref": "lead-1"}, headers=_h(admin_token))
+    client.patch(
+        f"/orgs/users/{rep_id}",
+        json={"user_ref": "rep-1", "manager_id": lead_id},
+        headers=_h(admin_token),
+    )
+    _call_as(client, key, "c_lead", user="lead-1")
+    _call_as(client, key, "c_rep", user="rep-1")
+    _call_as(client, key, "c_other", user="somebody-else")
+
+    mine = client.get("/calls?scope=mine", headers=_h(lead_token)).json()
+    assert {c["session_id"] for c in mine} == {"c_lead"}
+    team = client.get("/calls?scope=team", headers=_h(lead_token)).json()
+    assert {c["session_id"] for c in team} == {"c_lead", "c_rep"}
+    assert client.get("/calls?scope=bogus", headers=_h(lead_token)).status_code == 400
+
+
+def test_only_owner_or_admin_manages_a_call(client: TestClient) -> None:
+    admin_token, _ = _admin(client)
+    key = client.post("/orgs/keys", json={"name": "gw"}, headers=_h(admin_token)).json()["key"]
+    op_token, _ = _operator(client, admin_token, "op@acme.co")
+    _call_as(client, key, "m1", user="alice")
+    assert (
+        client.patch("/calls/m1", json={"private": True}, headers=_h(op_token)).status_code == 403
+    )
+    assert (
+        client.post(
+            "/calls/m1/share", json={"email": "op@acme.co"}, headers=_h(op_token)
+        ).status_code
+        == 403
+    )
+
+
+def test_org_users_carry_manager_and_ref(client: TestClient) -> None:
+    admin_token, _ = _admin(client)
+    _op_token, op_id = _operator(client, admin_token, "op@acme.co")
+    client.patch(f"/orgs/users/{op_id}", json={"user_ref": "e-1"}, headers=_h(admin_token))
+    listed = {u["user_id"]: u for u in client.get("/orgs/users", headers=_h(admin_token)).json()}
+    assert listed[op_id]["user_ref"] == "e-1"
+    assert (
+        client.patch(
+            "/orgs/users/ghost", json={"user_ref": "x"}, headers=_h(admin_token)
+        ).status_code
+        == 404
+    )
