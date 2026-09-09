@@ -52,7 +52,7 @@ function shell(active, view) {
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2.5 3.5 6v6c0 5 3.6 8.5 8.5 9.5 4.9-1 8.5-4.5 8.5-9.5V6L12 2.5Z" stroke="#3dd4e0" stroke-width="1.6"/><path d="M12 8v4.5M12 15.5v.01" stroke="#3dd4e0" stroke-width="1.8" stroke-linecap="round"/></svg>
       RingFence
     </div>`;
-  for (const [href, label] of [["#/overview", "Overview"], ["#/cases", "Cases"], ["#/keys", "API keys"], ["#/live", "Live"]]) {
+  for (const [href, label] of [["#/overview", "Overview"], ["#/calls", "Calls"], ["#/cases", "Cases"], ["#/keys", "API keys"], ["#/live", "Live"]]) {
     nav.append(el("a", { href, className: active === href ? "on" : "", textContent: label }));
   }
   const who = el("div", { className: "who" });
@@ -230,6 +230,103 @@ async function caseDetailView(sid) {
   } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
+// ---------- calls (oversight) ----------
+const ST_COLOR = { CALM: "--calm", WATCH: "--watch", ALERT: "--alert", INTERVENE: "--intervene", RESOLVED: "--alert" };
+
+function fmtDur(s) {
+  s = Math.round(s || 0);
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+async function callsView() {
+  const m = page("Calls", "Every call this org has run — filter by the API key that drove it.");
+  shell("#/calls", m);
+  const bar = el("div", { className: "row", style: "gap:10px;margin-bottom:14px" });
+  const sel = el("select", { className: "field", style: "max-width:260px" });
+  sel.innerHTML = `<option value="">all API keys</option>`;
+  bar.append(sel);
+  m.append(bar);
+  const box = el("div", { className: "card" }); box.textContent = "loading…"; m.append(box);
+
+  let keyName = {};
+  try {
+    for (const k of await api("/orgs/keys")) {
+      keyName[k.id] = k.name;
+      sel.append(el("option", { value: k.id, textContent: `${k.name} (${k.prefix}…)` }));
+    }
+  } catch { /* operator role can't list keys; filter stays "all" */ }
+
+  async function load() {
+    box.textContent = "loading…";
+    try {
+      const q = sel.value ? `?key_id=${encodeURIComponent(sel.value)}` : "";
+      const calls = await api("/calls" + q);
+      box.innerHTML = "";
+      const t = el("table");
+      t.innerHTML = "<thead><tr><th>started</th><th>API key</th><th>duration</th><th>peak</th><th>score</th><th></th></tr></thead>";
+      const tb = el("tbody");
+      for (const c of calls) {
+        const tr = el("tr", { style: "cursor:pointer" });
+        const started = c.started_at ? new Date(c.started_at * 1000).toLocaleString() : "—";
+        const kn = c.api_key_id ? esc(keyName[c.api_key_id] || c.api_key_id.slice(0, 8)) : "<span style='color:var(--t2)'>dev / none</span>";
+        const liveTag = c.live ? `<span class="pill st-WATCH">live</span>` : "";
+        tr.innerHTML = `<td class="mono" style="color:var(--t2)">${started}</td><td>${kn}</td><td class="mono">${c.live ? "—" : fmtDur(c.duration_s)}</td><td><span class="pill st-${c.peak_state}">${c.peak_state}</span></td><td class="mono">${c.peak_score}</td><td>${liveTag}</td>`;
+        tr.onclick = () => { location.hash = `#/calls/${encodeURIComponent(c.session_id)}`; };
+        tb.append(tr);
+      }
+      t.append(tb); box.append(t);
+      if (!calls.length) box.append(el("div", { className: "sub", textContent: "no calls yet — run one from the Live view" }));
+    } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  }
+  sel.onchange = load;
+  load();
+}
+
+function scoreChart(scores) {
+  const W = 680, H = 190, PAD = 28;
+  const c = el("canvas", { width: W, height: H, style: "width:100%;max-width:680px;height:auto;margin-top:8px" });
+  const g = c.getContext("2d");
+  const css = (v) => getComputedStyle(document.body).getPropertyValue(v).trim() || "#888";
+  const tMax = Math.max(1, ...scores.map((p) => p.t));
+  const x = (t) => PAD + (W - PAD * 2) * (t / tMax);
+  const y = (s) => H - PAD - (H - PAD * 2) * (Math.max(0, Math.min(100, s)) / 100);
+  // escalation bands
+  for (const [lo, hi, col] of [[0, 25, "--calm"], [25, 55, "--watch"], [55, 80, "--alert"], [80, 100, "--intervene"]]) {
+    g.fillStyle = css(col) + "18";
+    g.fillRect(PAD, y(hi), W - PAD * 2, y(lo) - y(hi));
+  }
+  g.strokeStyle = "#ffffff14"; g.beginPath(); g.moveTo(PAD, y(0)); g.lineTo(W - PAD, y(0)); g.stroke();
+  if (scores.length) {
+    g.strokeStyle = css("--accent"); g.lineWidth = 2; g.beginPath();
+    scores.forEach((p, i) => { const fn = i ? "lineTo" : "moveTo"; g[fn](x(p.t), y(p.score)); });
+    g.stroke();
+    for (const p of scores) {
+      g.fillStyle = css(ST_COLOR[p.state] || "--accent");
+      g.beginPath(); g.arc(x(p.t), y(p.score), 3, 0, 7); g.fill();
+    }
+  }
+  g.fillStyle = "#8A8F98"; g.font = "10px ui-monospace,monospace";
+  g.fillText("100", 2, y(100) + 4); g.fillText("0", 2, y(0) + 4);
+  g.fillText(Math.round(tMax) + "s", W - PAD - 10, H - 8);
+  return c;
+}
+
+async function callDetailView(sid) {
+  const m = page("Call " + sid, "");
+  shell("#/calls", m);
+  const box = el("div", { className: "card" }); box.textContent = "loading…"; m.append(box);
+  try {
+    const c = await api(`/calls/${encodeURIComponent(sid)}`);
+    box.innerHTML = `<div class="row" style="gap:12px"><span class="pill st-${c.peak_state}">${c.peak_state}</span><span class="mono">peak ${c.peak_score}</span><span class="sub" style="margin:0">${c.live ? "live now" : fmtDur(c.duration_s)} · ${(c.scores || []).length} decisions${c.has_case ? " · " : ""}</span>${c.has_case ? `<a href="#/cases/${encodeURIComponent(sid)}" style="font-size:12px">open case →</a>` : ""}</div>`;
+    box.append(scoreChart(c.scores || []));
+    const tx = el("div", { style: "font-family:var(--mono);font-size:12px;margin-top:16px;line-height:1.7" });
+    for (const [role, text, t] of c.transcript || []) tx.innerHTML += `<div><span style="color:var(--t2)">${role} t${t}</span> <span style="color:${role === "CALLER" ? "var(--caller)" : role === "CALLEE" ? "var(--callee)" : "var(--t2)"}">${esc(text)}</span></div>`;
+    if (!(c.transcript || []).length) tx.innerHTML = `<span class="sub">transcript not retained (needs RF_RETAIN_TRANSCRIPTS, and only ALERT+ calls open a case)</span>`;
+    box.append(tx);
+    box.append(el("a", { href: "#/calls", textContent: "← all calls", style: "display:inline-block;margin-top:16px;font-size:13px" }));
+  } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
 // ---------- live ----------
 let detach = null;
 function liveView() {
@@ -358,6 +455,8 @@ function route() {
   if (h === "#/signin") { if (store.token) { location.hash = "#/overview"; return; } return shell(null, authView("signin")); }
   if (h.startsWith("#/cases/")) return caseDetailView(decodeURIComponent(h.slice("#/cases/".length)));
   if (h === "#/cases") return casesView();
+  if (h.startsWith("#/calls/")) return callDetailView(decodeURIComponent(h.slice("#/calls/".length)));
+  if (h === "#/calls") return callsView();
   if (h === "#/keys") return keysView();
   if (h === "#/live") return liveView();
   return overviewView();

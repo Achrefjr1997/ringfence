@@ -12,6 +12,7 @@ from __future__ import annotations
 import sys
 
 from packages.billing.pg_meter import schema_sql as _billing_schema
+from packages.calls.pg_ledger import schema_sql as _calls_schema
 from packages.identity.migrate import schema_sql as _identity_schema
 from packages.intervene.pg_cases import schema_sql as _cases_schema
 
@@ -20,6 +21,7 @@ _SCHEMAS = (
     ("identity", _identity_schema),
     ("cases", _cases_schema),
     ("billing", _billing_schema),
+    ("calls", _calls_schema),
 )
 
 
