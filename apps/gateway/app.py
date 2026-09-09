@@ -36,7 +36,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from apps.gateway.auth import authenticate, build_auth_routes, read_json_body
-from apps.gateway.call_recorder import CallLedgerRecorder
+from apps.gateway.call_recorder import CallLedgerRecorder, TranscriptRecorder
 from apps.gateway.guardian import GuardianDispatcher
 from apps.gateway.orgs import build_org_routes
 from apps.gateway.ratelimit import RateLimiter, RateLimitMiddleware
@@ -56,6 +56,7 @@ from packages.calls.comments import (
     InMemoryCommentStore,
 )
 from packages.calls.ledger import CallLedger, CallRecord, InMemoryCallLedger
+from packages.calls.transcripts import InMemoryTranscriptStore, TranscriptStore
 from packages.contracts.audio import Frame, LegSpec, Mode, RoleHint, SessionDescriptor
 from packages.contracts.events import EventBus, InProcessBus
 from packages.contracts.risk import State
@@ -292,6 +293,7 @@ def create_app(
     call_ledger: CallLedger | None = None,
     comment_store: CommentStore | None = None,
     audit_log: AuditLog | None = None,
+    transcript_store: TranscriptStore | None = None,
     billing_provider: BillingProvider | None = None,
     asr: ASRProvider | None = None,
     guardian_dispatcher: GuardianDispatcher | None = None,
@@ -375,6 +377,17 @@ def create_app(
         on_shutdown.append(pg_audit.close_pool)
     else:
         the_audit = InMemoryAuditLog()
+
+    if transcript_store is not None:
+        the_transcripts: TranscriptStore = transcript_store
+    elif _dsn:
+        from packages.calls.pg_transcripts import PgTranscriptStore
+
+        pg_transcripts = PgTranscriptStore(_dsn)
+        the_transcripts = pg_transcripts
+        on_shutdown.append(pg_transcripts.close_pool)
+    else:
+        the_transcripts = InMemoryTranscriptStore()
 
     the_secret = session_secret or get_settings().session_secret
     if not the_secret:
@@ -740,12 +753,13 @@ def create_app(
         body["shared_with"] = the_ledger.shares(rec.session_id)
         body["can_manage"] = v[1] or (rec.user_ref is not None and rec.user_ref == v[2])
         case = the_cases.get(rec.session_id)
-        if case is not None and (user is None or case.tenant == rec.tenant):
-            body["transcript"] = [{"role": r, "text": t, "t": ts} for (r, t, ts) in case.transcript]
-            body["has_case"] = True
-        else:
-            body["transcript"] = []
-            body["has_case"] = False
+        body["has_case"] = case is not None and (user is None or case.tenant == rec.tenant)
+        # prefer the per-call transcript (P6, retained for every call); fall
+        # back to the Case transcript for calls captured before P6 shipped
+        turns = the_transcripts.get(rec.session_id)
+        if not turns and body["has_case"] and case is not None:
+            turns = list(case.transcript)
+        body["transcript"] = [{"role": r, "text": t, "t": ts} for (r, t, ts) in turns]
         return JSONResponse(body)
 
     def _owned_call(request: Request, user: User | None) -> CallRecord | JSONResponse:
@@ -1159,12 +1173,15 @@ def create_app(
     guardian = guardian_dispatcher or GuardianDispatcher(the_tenants, the_pack, dry_run=cfg.dry_run)
     # call ledger: watch rf.*.decision, append the escalation graph
     recorder = CallLedgerRecorder(the_ledger)
+    # per-call transcript: buffer rf.*.turn, flush on close (RF_RETAIN_TRANSCRIPTS)
+    transcriber = TranscriptRecorder(the_transcripts)
 
     @contextlib.asynccontextmanager
     async def _lifespan(_: Starlette) -> AsyncIterator[None]:
         tasks = [
             asyncio.create_task(guardian.run(the_bus)),
             asyncio.create_task(recorder.run(the_bus)),
+            asyncio.create_task(transcriber.run(the_bus)),
         ]
         try:
             yield
@@ -1188,6 +1205,7 @@ def create_app(
     app.state.call_ledger = the_ledger
     app.state.comment_store = the_comments_store
     app.state.audit_log = the_audit
+    app.state.transcript_store = the_transcripts
     app.state.asr_router = the_router
     app.state.guardian = guardian
     return app

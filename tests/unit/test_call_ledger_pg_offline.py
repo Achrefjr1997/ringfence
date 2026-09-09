@@ -14,6 +14,7 @@ def test_schema_declares_both_tables_and_is_idempotent() -> None:
         "call_comment_mentions",
         "call_shares",
         "call_access_log",
+        "call_transcript",
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
     assert "private BOOLEAN NOT NULL DEFAULT FALSE" in sql  # P4 alter

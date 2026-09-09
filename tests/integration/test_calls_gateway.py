@@ -12,6 +12,7 @@ from starlette.testclient import TestClient
 from apps.gateway.app import create_app
 from packages.asr.null import NullASR
 from packages.calls.ledger import InMemoryCallLedger
+from packages.calls.transcripts import InMemoryTranscriptStore
 
 SECRET = "test-session-secret"
 
@@ -22,12 +23,18 @@ def ledger() -> InMemoryCallLedger:
 
 
 @pytest.fixture()
-def client(ledger: InMemoryCallLedger) -> TestClient:
+def transcripts() -> InMemoryTranscriptStore:
+    return InMemoryTranscriptStore()
+
+
+@pytest.fixture()
+def client(ledger: InMemoryCallLedger, transcripts: InMemoryTranscriptStore) -> TestClient:
     return TestClient(
         create_app(
             provider_factory=lambda spec: NullASR([]),
             session_secret=SECRET,
             call_ledger=ledger,
+            transcript_store=transcripts,
         )
     )
 
@@ -339,3 +346,32 @@ def test_no_delete_route_for_the_audit_log(client: TestClient) -> None:
     client.get("/calls/a3", headers=_h(admin_token))
     assert client.delete("/calls/a3/access-log", headers=_h(admin_token)).status_code in (404, 405)
     assert client.delete("/audit", headers=_h(admin_token)).status_code in (404, 405)
+
+
+# -- P6: transcript for every call ----------------------------------
+
+
+def test_call_detail_serves_the_stored_transcript(
+    client: TestClient, transcripts: InMemoryTranscriptStore
+) -> None:
+    admin_token, _ = _admin(client)
+    key = client.post("/orgs/keys", json={"name": "gw"}, headers=_h(admin_token)).json()["key"]
+    _call_as(client, key, "t1")
+    # a call that never opened a Case still shows its transcript
+    transcripts.save(
+        "t1", "acme", [("CALLER", "your account is locked", 2.0), ("CALLEE", "what?", 4.0)]
+    )
+
+    body = client.get("/calls/t1", headers=_h(admin_token)).json()
+    assert body["has_case"] is False
+    assert [(t["role"], t["text"]) for t in body["transcript"]] == [
+        ("CALLER", "your account is locked"),
+        ("CALLEE", "what?"),
+    ]
+
+
+def test_call_detail_transcript_is_empty_without_retention(client: TestClient) -> None:
+    admin_token, _ = _admin(client)
+    key = client.post("/orgs/keys", json={"name": "gw"}, headers=_h(admin_token)).json()["key"]
+    _call_as(client, key, "t2")
+    assert client.get("/calls/t2", headers=_h(admin_token)).json()["transcript"] == []
