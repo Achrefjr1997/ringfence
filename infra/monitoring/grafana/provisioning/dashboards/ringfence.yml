@@ -1,0 +1,18 @@
+# Grafana dashboard provisioning (T-7.5).
+# Loads every dashboard JSON under the mounted folder at boot and keeps it
+# in sync. allowUiUpdates:false -- the file is the source of truth; edits in
+# the UI are reverted on restart (export the JSON and commit it instead).
+
+apiVersion: 1
+
+providers:
+  - name: ringfence
+    orgId: 1
+    folder: RingFence
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

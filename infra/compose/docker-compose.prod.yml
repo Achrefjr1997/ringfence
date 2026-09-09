@@ -79,8 +79,10 @@ services:
       retries: 20
 
   # --- monitoring (T-7.5) ------------------------------------------
-  # Internal only. Reach Prometheus / Alertmanager over an SSH tunnel, or
-  # add your own authenticated ingress. Alerts route to RF_ALERT_WEBHOOK_URL.
+  # Internal only. Reach Prometheus / Alertmanager / Grafana over an SSH
+  # tunnel, or add your own authenticated ingress. Alerts route to
+  # RF_ALERT_WEBHOOK_URL. Grafana loads the RingFence dashboard + Prometheus
+  # datasource from infra/monitoring/grafana/provisioning at boot.
   prometheus:
     image: prom/prometheus:v3.1.0
     restart: unless-stopped
@@ -112,9 +114,25 @@ services:
         /etc/alertmanager/alertmanager.yml > /tmp/am.yml &&
         exec /bin/alertmanager --config.file=/tmp/am.yml --storage.path=/alertmanager
 
+  grafana:
+    image: grafana/grafana:11.4.0
+    restart: unless-stopped
+    depends_on: [prometheus]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${RF_GRAFANA_ADMIN_PASSWORD:?set RF_GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    volumes:
+      - ./../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./../monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+
 volumes:
   caddy_data:
   caddy_config:
   pg_data:
   prom_data:
   am_data:
+  grafana_data:

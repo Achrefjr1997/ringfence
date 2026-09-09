@@ -33,7 +33,7 @@ instance in the EU), not the 10k tier.
 Before there is a server, run the exact production topology on your
 machine — same image, same `RF_*` surface, real Postgres, the
 circuit-breaking ASR router, the guardian dispatcher, Prometheus +
-Alertmanager. Only three things differ (a `docker-compose.local-prod.yml`
+Alertmanager + Grafana. Only three things differ (a `docker-compose.local-prod.yml`
 overlay): the gateway is **built** instead of pulled from GHCR, its port is
 also published on `:8000`, and Caddy serves `https://localhost` with its
 own internal CA (`RF_TLS=tls internal`) so no DNS or Let's Encrypt is
@@ -50,7 +50,7 @@ docker compose -f docker-compose.prod.yml -f docker-compose.local-prod.yml \
 curl -k https://localhost/health
 curl -k -XPOST https://localhost/auth/signup -H content-type:application/json \
   -d '{"org_name":"L","email":"a@l.test","password":"pw-12345678"}'
-# Prometheus http://localhost:9090  ·  Alertmanager http://localhost:9093
+# Grafana http://localhost:3000 (dashboard, no login)  ·  Prometheus http://localhost:9090  ·  Alertmanager http://localhost:9093
 
 docker compose -f docker-compose.prod.yml -f docker-compose.local-prod.yml \
   --env-file .env.local-prod down            # add -v to wipe the volumes

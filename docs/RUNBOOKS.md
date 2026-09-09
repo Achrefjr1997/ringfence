@@ -121,8 +121,14 @@ certs — re-issuable, so lower priority).
 
 Prometheus (`infra/monitoring/`) scrapes `gateway:8000/metrics` and
 evaluates `alert-rules.yml`; Alertmanager POSTs firing/resolved alerts to
-`RF_ALERT_WEBHOOK_URL`. Both services are internal — reach the UIs over an
-SSH tunnel (`ssh -L 9090:localhost:9090 -L 9093:localhost:9093 box`).
+`RF_ALERT_WEBHOOK_URL`. Grafana serves the **RingFence — Gateway**
+dashboard (admits, rejections by reason, active vs capacity, per-tenant
+sessions, ASR breaker state), datasource + dashboard provisioned from
+`infra/monitoring/grafana/`; the admin password is `RF_GRAFANA_ADMIN_PASSWORD`.
+All three services are internal — reach the UIs over an SSH tunnel
+(`ssh -L 3000:localhost:3000 -L 9090:localhost:9090 -L 9093:localhost:9093 box`).
+Locally they are published on `:3000` / `:9090` / `:9093`; Grafana opens
+straight onto the dashboard (anonymous Admin).
 
 | Alert | Severity | Means | First response |
 |---|---|---|---|

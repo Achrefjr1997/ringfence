@@ -58,6 +58,22 @@ def test_everything_restarts_and_state_is_on_volumes(prod: dict) -> None:
     assert any("pg_data:" in v for v in prod["services"]["postgres"]["volumes"])
 
 
+def test_grafana_is_internal_and_provisions_itself(prod: dict) -> None:
+    g = prod["services"]["grafana"]
+    assert g["image"] == "grafana/grafana:11.4.0"  # pinned
+    assert "ports" not in g  # internal only, like prometheus / alertmanager
+    assert g["restart"] == "unless-stopped"
+    assert g["depends_on"] == ["prometheus"]
+    # required admin password, same ${VAR:?} convention as the other secrets
+    assert ":?" in g["environment"]["GF_SECURITY_ADMIN_PASSWORD"]
+    assert g["environment"]["GF_USERS_ALLOW_SIGN_UP"] == "false"
+    mounts = " ".join(g["volumes"])
+    assert "/etc/grafana/provisioning:ro" in mounts
+    assert "/var/lib/grafana/dashboards:ro" in mounts
+    assert "grafana_data:/var/lib/grafana" in mounts
+    assert "grafana_data" in prod["volumes"]
+
+
 def test_caddy_config_binds_the_domain_and_proxies_the_gateway() -> None:
     text = CADDYFILE.read_text(encoding="utf-8")
     assert "{$RF_DOMAIN}" in text
@@ -107,6 +123,8 @@ def test_local_prod_overlay_builds_the_image_and_exposes_the_dashboards() -> Non
     assert svc["gateway"]["ports"] == ["8000:8000"]  # direct access for debugging
     assert svc["prometheus"]["ports"] == ["9090:9090"]
     assert svc["alertmanager"]["ports"] == ["9093:9093"]
+    assert svc["grafana"]["ports"] == ["3000:3000"]
+    assert svc["grafana"]["environment"]["GF_AUTH_ANONYMOUS_ENABLED"] == "true"
     assert svc["migrate"]["depends_on"]["postgres"]["condition"] == "service_healthy"
 
 
