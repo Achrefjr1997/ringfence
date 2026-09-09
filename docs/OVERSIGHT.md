@@ -16,12 +16,17 @@ comparable products do it (see *Prior art* at the end).
 | **4** | RBAC hierarchy (own → team → org) + private calls + shares | — | **shipped** (`feat/oversight-p4-rbac`) |
 | **5** | Access audit log (who viewed / played / exported which call) | — | **shipped** (`feat/oversight-p5-audit`) |
 | **6** | Transcript retained for *every* call, not just ALERT+ cases | `RF_RETAIN_TRANSCRIPTS` (invariant #5) | **shipped** (`feat/oversight-p6-transcript`) |
-| **7** | Full-conversation audio: capture, storage, playback, retention | **T-7.0 legal basis + DPA** | planned |
+| **7** | Full-conversation audio: capture, storage, playback, retention | **T-7.0 legal basis + DPA** — **held** | planned |
 | **8** | Live wall (supervisor sees every active call) | — | **shipped** (`feat/oversight-p8-livewall`) |
-| **9** | Employee timeline + per-tenant retention controls | — | planned |
+| **9** | Employee timeline | — | **shipped** (`feat/oversight-p9-timeline`) |
 
-Only **Phase 7** is legally gated. Phases 2–6 and 8 can ship without
-counsel.
+Only **Phase 7** is legally gated and is **on hold** until the legal basis
+(T-7.0 + DPA) is in hand; when P7 lands, its retention TTL sweep covers
+every data class (ledger / transcript / audit / audio), which is why the
+standalone "per-tenant retention controls" once planned for P9 fold into
+P7 rather than shipping without the sweep that gives them teeth. P7's
+audio format is **Opus**, storage is **local filesystem** (a mounted
+volume) — decided 2026-09-09.
 
 ---
 
@@ -251,15 +256,18 @@ opt-in and off by default.
   clicks through to the call detail and disappears on its `end` event.
 * **Tests:** `/sessions` lists live calls, tenant-scoped, drops on socket
   close; `/sessions` and `/events` need auth.
-## Phase 9 — employee timeline + retention controls
 
-* **Console:** an employee page — all their calls on one timeline, a
-  peak-state histogram, their alert rate over time, their comment
-  activity (Chorus / Dialpad "conversation history" model).
-* **Per-tenant retention config** for ledger / transcript / audio, each
-  enforced by its sweep; surfaced in an admin **Settings** view.
-* **Tests:** each retention class is swept independently; timeline
-  aggregation.
+## Phase 9 — employee timeline *(shipped)*
+
+* **Console:** an employee page (`#/employee/<ref>`, reached from the
+  Calls → *By employee* table) — every call attributed to that person, a
+  peak-state histogram, an alerts-per-day sparkline, and the call list,
+  each row clicking through to the call detail (Chorus / Dialpad
+  "conversation history" model). Pure frontend on `GET /calls?user=<ref>`.
+* **Retention controls** were planned here too but fold into Phase 7: the
+  audio TTL sweep is written once, over every data class, and shipping a
+  sweep before P7 (the data class that actually needs one) adds a
+  delete-path with little payoff. Until then nothing is auto-deleted.
 
 ---
 

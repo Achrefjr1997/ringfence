@@ -334,7 +334,7 @@ async function callsView() {
       const tr = el("tr", { style: "cursor:pointer" });
       const last = u.last_at ? new Date(u.last_at * 1000).toLocaleString() : "—";
       tr.innerHTML = `<td>${esc(u.user_label || u.user_ref)}</td><td class="mono">${u.calls}</td><td class="mono">${u.alerts}</td><td class="mono">${u.interventions}</td><td><span class="pill st-${u.peak_state}">${u.peak_state}</span></td><td class="mono" style="color:var(--t2)">${last}</td>`;
-      tr.onclick = () => { grp.value = "calls"; usr.value = u.user_ref; load(); };
+      tr.onclick = () => { location.hash = `#/employee/${encodeURIComponent(u.user_ref)}`; };
       tb.append(tr);
     }
     t.append(tb); box.append(t);
@@ -494,6 +494,63 @@ function commentsPanel(sid) {
   };
   load();
   return panel;
+}
+
+// ---------- employee timeline (P9) ----------
+const _ORD = { CALM: 0, WATCH: 1, ALERT: 2, INTERVENE: 3, RESOLVED: 2 };
+
+async function employeeView(ref) {
+  const m = page("Employee · " + ref, "Every call attributed to this employee.");
+  shell("#/calls", m);
+  const box = el("div", { className: "card" }); box.textContent = "loading…"; m.append(box);
+  try {
+    const calls = await api(`/calls?user=${encodeURIComponent(ref)}&limit=500`);
+    box.innerHTML = "";
+    const alerts = calls.filter((c) => _ORD[c.peak_state] >= 2).length;
+    const interv = calls.filter((c) => _ORD[c.peak_state] >= 3).length;
+    box.append(el("div", { className: "row", style: "gap:16px;flex-wrap:wrap", innerHTML:
+      `<span class="mono">${calls.length} calls</span><span class="mono" style="color:var(--alert)">${alerts} alerts</span><span class="mono" style="color:var(--intervene)">${interv} interventions</span>` }));
+
+    // peak-state histogram
+    const hist = { CALM: 0, WATCH: 0, ALERT: 0, INTERVENE: 0 };
+    for (const c of calls) hist[c.peak_state === "RESOLVED" ? "ALERT" : c.peak_state] = (hist[c.peak_state === "RESOLVED" ? "ALERT" : c.peak_state] || 0) + 1;
+    const hmax = Math.max(1, ...Object.values(hist));
+    const hd = el("div", { style: "margin-top:14px" });
+    for (const [st, n] of Object.entries(hist)) {
+      hd.append(el("div", { className: "row", style: "gap:8px;align-items:center;margin:3px 0", innerHTML:
+        `<span class="pill st-${st}" style="min-width:74px;text-align:center">${st}</span><div class="bar" style="flex:1;max-width:320px"><span style="width:${(n / hmax) * 100}%"></span></div><span class="mono" style="color:var(--t2)">${n}</span>` }));
+    }
+    box.append(hd);
+
+    // alerts per day
+    const byDay = {};
+    for (const c of calls) {
+      if (_ORD[c.peak_state] < 2 || !c.started_at) continue;
+      const d = new Date(c.started_at * 1000).toISOString().slice(0, 10);
+      byDay[d] = (byDay[d] || 0) + 1;
+    }
+    const days = Object.keys(byDay).sort();
+    if (days.length) {
+      const dmax = Math.max(...Object.values(byDay));
+      const spark = el("div", { style: "display:flex;gap:3px;align-items:flex-end;height:56px;margin-top:16px" });
+      for (const d of days) spark.append(el("div", { title: `${d}: ${byDay[d]}`, style: `width:10px;background:var(--alert);height:${(byDay[d] / dmax) * 100}%` }));
+      box.append(el("div", { className: "sub", style: "margin:16px 0 0", textContent: "alerts per day" }), spark);
+    }
+
+    // the calls
+    const t = el("table"); t.style.marginTop = "16px";
+    t.innerHTML = "<thead><tr><th>started</th><th>API key</th><th>duration</th><th>peak</th><th>score</th></tr></thead>";
+    const tb = el("tbody");
+    for (const c of calls) {
+      const tr = el("tr", { style: "cursor:pointer" });
+      tr.innerHTML = `<td class="mono" style="color:var(--t2)">${c.started_at ? new Date(c.started_at * 1000).toLocaleString() : "—"}</td><td class="mono" style="color:var(--t2)">${c.api_key_id ? esc(c.api_key_id.slice(0, 8)) : "—"}</td><td class="mono">${c.live ? "—" : fmtDur(c.duration_s)}</td><td><span class="pill st-${c.peak_state}">${c.peak_state}</span></td><td class="mono">${c.peak_score}</td>`;
+      tr.onclick = () => { location.hash = `#/calls/${encodeURIComponent(c.session_id)}`; };
+      tb.append(tr);
+    }
+    t.append(tb); box.append(t);
+    if (!calls.length) box.append(el("div", { className: "sub", textContent: "no calls for this employee" }));
+    box.append(el("a", { href: "#/calls", textContent: "← all calls", style: "display:inline-block;margin-top:16px;font-size:13px" }));
+  } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
 // ---------- wall (P8: every live call) ----------
@@ -686,6 +743,7 @@ function route() {
   if (h === "#/calls") return callsView();
   if (h === "#/keys") return keysView();
   if (h === "#/team") return teamView();
+  if (h.startsWith("#/employee/")) return employeeView(decodeURIComponent(h.slice("#/employee/".length)));
   if (h === "#/wall") return wallView();
   if (h === "#/live") return liveView();
   return overviewView();
