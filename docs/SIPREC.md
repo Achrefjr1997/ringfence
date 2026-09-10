@@ -62,18 +62,36 @@ Covered by `tests/unit/test_siprec_srs.py` — a scripted SBC over real
 localhost UDP: `INVITE` + RTP + `BYE`, `OPTIONS` keepalive, `INVITE` with no
 SDP → `488`, garbage datagrams ignored.
 
-### P3 — uplink + local dev SRC `apps/siprec/__main__.py`
+### P3 — uplink + local dev SRC ✅ (PR #56)
 
-* wires `SiprecSrs` callbacks to `/ws/capture` — a `websockets` client per leg,
-  `key=` from `RF_SIPREC_API_KEY`, `session=` from metadata, `leg=far|near`
-  from `role_for_stream`, `user`/`user_label` from the participant `nameID`.
-* `scripts/siprec_send.py` — a minimal SRC test double: `INVITE`s the SRS with
-  real `rs-metadata` and streams the two `corpus/fixtures/audio/*` legs as RTP
-  at real-time pace. Deterministic two-leg ground truth, no carrier, no
-  FreeSWITCH.
-* `infra/compose/docker-compose.siprec.yml` — optional overlay running
-  `apps/siprec` against the gateway; doc for pointing FreeSWITCH `mod_siprec` /
-  Asterisk at it.
+* `apps/siprec/` — `SiprecUplink` runs a `SiprecSrs` and, per `(session, leg)`,
+  opens one `websockets` client to `/ws/capture` (`session=` / `leg=` from the
+  SRS, `key=` from `RF_SIPREC_API_KEY`, optional `tenant=`). Binary 40 ms
+  frames go straight onto the socket; a reader logs any `rejected` message.
+  `python -m apps.siprec` runs it, env-configured, with SIGINT/SIGTERM
+  teardown. The gateway is untouched — this is the browser two-socket path.
+* `packages/ingress/siprec/loopback.py` — a loopback SIPREC *client*:
+  `play_call(srs, far, near, ...)` sends a real `INVITE` + `rs-metadata` + two
+  µ-law RTP streams + `BYE` over UDP. `python -m packages.ingress.siprec.loopback
+  --far a.wav --near b.wav --speed 1` for a live local call; `speed=0` (no
+  pacing) drives the tests. Needs `g711.ulaw_encode` (added — nearest-level
+  inverse of the decode table).
+* Covered by `tests/unit/test_siprec_uplink.py` — loopback → SRS → uplink → a
+  stand-in `/ws/capture`, asserting one binary WS per leg, keyed and tagged.
+
+**Local run** (all on `localhost`, ephemeral RTP ports — no compose overlay
+needed): issue an API key in the console, then
+
+    RF_SIPREC_API_KEY=rf_... RF_SIPREC_CALLER_AOR=sip:caller@pstn \
+      python -m apps.siprec                       # SRS on udp/5060 -> :8000
+    python -m packages.ingress.siprec.loopback \
+      --far corpus/fixtures/audio/<caller>.wav \
+      --near corpus/fixtures/audio/<callee>.wav --speed 1
+
+The call then shows up in the console with a live score, transcript, and —
+audio retention being on — a recording. A `docker-compose.siprec.yml` overlay
++ a configurable RTP port range (for an external FreeSWITCH/Asterisk SRC) come
+with P4.
 
 ### P4 — admission + signalling enrichment
 
@@ -83,6 +101,8 @@ SDP → `488`, garbage datagrams ignored.
   reason.
 * `Mode.CARRIER` on the `SessionDescriptor`; SRS metrics (`siprec_sessions`,
   `siprec_rtp_lost`, `siprec_reorder_depth`).
+* configurable RTP port range + `infra/compose/docker-compose.siprec.yml`
+  overlay for pointing FreeSWITCH `mod_siprec` / Asterisk at the SRS.
 
 ---
 

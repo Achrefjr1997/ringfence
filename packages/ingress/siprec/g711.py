@@ -48,10 +48,27 @@ def _alaw_sample(byte: int) -> int:
 _ULAW_TABLE: Int16 = np.array([_ulaw_sample(b) for b in range(256)], dtype=np.int16)
 _ALAW_TABLE: Int16 = np.array([_alaw_sample(b) for b in range(256)], dtype=np.int16)
 
+# Encode by inverting the decode table: for every int16 level, the mu-law
+# byte whose decoded value is nearest.  Correct by construction and needs no
+# second reference implementation to keep in step with the decoder.
+_ULAW_ORDER = np.argsort(_ULAW_TABLE, kind="stable")
+_ULAW_SORTED = _ULAW_TABLE[_ULAW_ORDER].astype(np.int32)
+
 
 def ulaw_decode(payload: bytes) -> Int16:
     """mu-law bytes -> linear PCM16 samples."""
     return _ULAW_TABLE[np.frombuffer(payload, dtype=np.uint8)]
+
+
+def ulaw_encode(samples: Int16 | bytes) -> bytes:
+    """Linear PCM16 -> mu-law bytes (nearest representable level)."""
+    src = np.frombuffer(samples, dtype="<i2") if isinstance(samples, bytes) else samples
+    x = np.asarray(src, dtype=np.int32)
+    hi = np.clip(np.searchsorted(_ULAW_SORTED, x), 1, len(_ULAW_SORTED) - 1)
+    lo = hi - 1
+    nearer_lo = np.abs(x - _ULAW_SORTED[lo]) <= np.abs(x - _ULAW_SORTED[hi])
+    pick = np.where(nearer_lo, lo, hi)
+    return bytes(_ULAW_ORDER[pick].astype(np.uint8).tobytes())
 
 
 def alaw_decode(payload: bytes) -> Int16:
