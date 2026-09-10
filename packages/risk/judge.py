@@ -17,7 +17,7 @@ import asyncio
 import hashlib
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field, ValidationError
@@ -28,7 +28,12 @@ from packages.policy.pack import PolicyPack
 from packages.risk.kb import Excerpt, KnowledgeBase
 
 VerdictLabel = Literal["benign", "unclear", "suspicious", "fraud"]
-_TIMEOUT_S = 0.8
+_TIMEOUT_S = 4.0
+# Latency histogram bounds, in seconds.  Chosen around the budget so the
+# question "is the judge answering inside it?" is readable straight off the
+# buckets rather than inferred from an average.
+_LATENCY_BUCKETS = (0.5, 1.0, 2.0, 3.0, 4.0)
+DEFAULT_TIMEOUT_S = _TIMEOUT_S  # the gateway's env default; keep the two in step
 _MAX_PROMPT_EXAMPLES = 12
 
 
@@ -95,6 +100,34 @@ def _miss(reason: str, latency_ms: int, model_version: str) -> Verdict:
     )
 
 
+@dataclass
+class JudgeStats:
+    """Process-wide judge counters.
+
+    A miss is silent by design -- ``_miss`` returns ``adjustment=0`` so a slow
+    or broken judge degrades to rules-only rather than stalling the call.
+    That is the right behaviour and it is also why nothing noticed the judge
+    timing out: without these counters, "the judge contributed nothing" and
+    "the judge said benign" look identical from outside.
+    """
+
+    calls: int = 0
+    misses: dict[str, int] = field(default_factory=dict)  # reason -> count
+    latency_sum_s: float = 0.0
+    latency_count: int = 0
+    buckets: dict[float, int] = field(default_factory=lambda: dict.fromkeys(_LATENCY_BUCKETS, 0))
+
+    def record(self, elapsed_s: float) -> None:
+        self.latency_sum_s += elapsed_s
+        self.latency_count += 1
+        for edge in _LATENCY_BUCKETS:
+            if elapsed_s <= edge:
+                self.buckets[edge] += 1
+
+    def miss(self, reason: str) -> None:
+        self.misses[reason] = self.misses.get(reason, 0) + 1
+
+
 class BoundedJudge:
     def __init__(
         self,
@@ -110,6 +143,7 @@ class BoundedJudge:
         self._kb = kb
         self._calls: dict[str, int] = {}
         self.last_prompt_hash: str | None = None
+        self.stats = JudgeStats()
 
     def calls_made(self, session_id: str) -> int:
         return self._calls.get(session_id, 0)
@@ -118,8 +152,10 @@ class BoundedJudge:
         cap = pack.judge.max_adjustment
 
         if self._calls.get(window.session_id, 0) >= pack.judge.max_calls_per_session:
+            self.stats.miss("budget")
             return _miss("session budget exhausted", 0, self._model)
         self._calls[window.session_id] = self._calls.get(window.session_id, 0) + 1
+        self.stats.calls += 1
 
         examples = self._kb.examples_for(window) if self._kb is not None else ()
         system, user = _build_prompt(window, cap, examples)
@@ -134,14 +170,21 @@ class BoundedJudge:
                 timeout=self._timeout_s,
             )
         except (TimeoutError, asyncio.TimeoutError):
-            return _miss("timeout", int((time.perf_counter() - started) * 1000), self._model)
+            elapsed = time.perf_counter() - started
+            self.stats.miss("timeout")
+            self.stats.record(elapsed)
+            return _miss("timeout", int(elapsed * 1000), self._model)
         except Exception as exc:  # noqa: BLE001 — any caller failure is a miss
+            self.stats.miss("caller_error")
             return _miss(f"caller error: {type(exc).__name__}", 0, self._model)
 
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        elapsed = time.perf_counter() - started
+        elapsed_ms = int(elapsed * 1000)
+        self.stats.record(elapsed)
         try:
             parsed = _VerdictJSON.model_validate_json(raw)
         except (ValidationError, ValueError):
+            self.stats.miss("malformed")
             return _miss("malformed response", elapsed_ms, self._model)
 
         adjustment = max(-cap, min(cap, int(parsed.adjustment)))

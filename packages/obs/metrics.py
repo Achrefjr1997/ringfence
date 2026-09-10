@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from packages.risk.judge import JudgeStats
+
 _PREFIX = "ringfence"
 
 
@@ -21,6 +23,7 @@ class MetricsSnapshot:
     rejected: Mapping[str, int] = field(default_factory=dict)
     active_by_tenant: Mapping[str, int] = field(default_factory=dict)
     asr_breakers: Mapping[str, str] = field(default_factory=dict)  # provider -> state
+    judge: JudgeStats | None = None  # None when the Tier-2 judge is not configured
 
 
 def _escape(label_value: str) -> str:
@@ -30,6 +33,35 @@ def _escape(label_value: str) -> str:
 def _block(name: str, kind: str, help_text: str, lines: list[str]) -> list[str]:
     out = [f"# HELP {_PREFIX}_{name} {help_text}", f"# TYPE {_PREFIX}_{name} {kind}"]
     out.extend(f"{_PREFIX}_{name}{line}" for line in lines)
+    return out
+
+
+def _judge_blocks(stats: JudgeStats) -> list[str]:
+    """The Tier-2 judge degrades silently -- a timeout returns adjustment=0
+    and the call proceeds rules-only.  Without these, "contributed nothing"
+    and "said benign" are indistinguishable from outside."""
+    out = _block(
+        "judge_calls_total", "counter", "Judge evaluations attempted.", [f" {stats.calls}"]
+    )
+    out += _block(
+        "judge_misses_total",
+        "counter",
+        "Judge evaluations that contributed nothing, by reason.",
+        [f'{{reason="{_escape(r)}"}} {n}' for r, n in sorted(stats.misses.items())],
+    )
+    cumulative = 0
+    lines: list[str] = []
+    for edge in sorted(stats.buckets):
+        cumulative = stats.buckets[edge]
+        lines.append(f'_bucket{{le="{edge}"}} {cumulative}')
+    lines.append(f'_bucket{{le="+Inf"}} {stats.latency_count}')
+    lines.append(f"_sum {stats.latency_sum_s:.4f}")
+    lines.append(f"_count {stats.latency_count}")
+    out += [
+        f"# HELP {_PREFIX}_judge_latency_seconds Judge round-trip latency.",
+        f"# TYPE {_PREFIX}_judge_latency_seconds histogram",
+        *(f"{_PREFIX}_judge_latency_seconds{line}" for line in lines),
+    ]
     return out
 
 
@@ -68,4 +100,6 @@ def prometheus_text(snap: MetricsSnapshot) -> str:
         out += _block(
             "asr_breaker_state", "gauge", "ASR circuit-breaker state per provider.", lines
         )
+    if snap.judge is not None:
+        out += _judge_blocks(snap.judge)
     return "\n".join(out) + "\n"
