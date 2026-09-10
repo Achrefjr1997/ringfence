@@ -37,7 +37,7 @@ so the 90 s evidence half-life and the combo windows behave. Two models:
 | call recall (fraud → ALERT+) | **0.2725** | 0.035 |
 | FPR ALERT+ (benign) | 0.000 | 0.000 |
 | FPR INTERVENE (benign) | 0.000 | 0.000 |
-| **benign peak-score margin to ALERT** | **−13.09** | +55.00 |
+| **benign peak-score margin to ALERT** | **−13.09** | +55.00 *(never reproducible — see below)* |
 
 Per family (200 dialogues each):
 
@@ -64,9 +64,15 @@ Per family (200 dialogues each):
   phrases (`sweepstakes`, `processing fee`, `you've been selected`) were
   *rejected* during mining because RingFence has **no pretext signal** to hang
   them on.
-- **The precision headroom is nearly gone, and nothing measured it.** The old
-  file said *"Precision holds… Whatever we add for recall must not spend this."*
-  The very next commit spent most of it:
+- **The old `+55.00` margin was wrong, not regressed.** Re-running this
+  benchmark in a worktree at `d743c3c` — the exact commit that wrote the
+  previous version of this file — reproduces recall `0.035` exactly and gives
+  margin **−13.09**, not `+55.00`. `+55.00` is the *eight-fixture* margin
+  (`alert 55 − max benign peak 0.0`, see `reports/latest.json`); it was pasted
+  into the external-benchmark table by mistake. `d7acf11` bought recall and did
+  **not** spend precision — margin is −13.09 both before and after it.
+- **But the headroom really is gone, and always was here.** FPR is 0.000 at
+  every threshold, which is why nothing noticed:
 
   | benign peak score | items (of 800) |
   |---|---|
@@ -76,11 +82,12 @@ Per family (200 dialogues each):
   | 40–59 | 11 |
   | **68.1** | **1** |
 
-  164 benign calls now score above zero where previously **all 800 peaked at
-  0.0**. The worst (`mas_train_0051`, an *appointment* call) reaches **68.1** —
-  13 points above the ALERT threshold — and is held at WATCH only by the
-  `sustain_turns: 2` hysteresis rule. Headline FPR is still 0.000, but it is now
-  one unlucky turn away from not being.
+  164 of 800 benign calls score above zero. The worst (`mas_train_0051`, an
+  *appointment* call) reaches **68.1** — 13 points above the ALERT threshold —
+  and is held at WATCH only by the `sustain_turns: 2` hysteresis rule. Headline
+  FPR is 0.000 and is one unlucky turn away from not being. **FPR counts
+  threshold crossings; it cannot see a corpus creeping up to the line.** That is
+  why `packages/eval/gate.py` now gates the margin as well.
 - **`VERIF_INVERT` is the precision liability.** It fires **200 times across
   benign calls** — more than every other signal combined (`RAIL_UNUSUAL` 87,
   `URGENCY` 56, `OFFER_CALLBACK` 14, `CALLBACK_SUPPRESS` 4) — and carries the
@@ -88,10 +95,12 @@ Per family (200 dialogues each):
   `insurance` (67 items), `delivery` (56) and `appointment` (39).
 
 **The lesson for the next recall change:** single high-weight lexical terms buy
-recall on the family that uses them and spend precision everywhere. Recall that
-generalises has to come from *corroboration* — several distinct signals, or the
-same signal pressed repeatedly — which is what `ESCALATION` and the combos are
-for. `ESCALATION` is currently declared in the pack and emitted by nothing.
+recall on the family that uses them — `ssn` 8% → 99% — and leave every other
+family where it was. Recall that generalises has to come from *corroboration*:
+several distinct signals, or the same signal pressed repeatedly. That is what
+`ESCALATION` and the combos are for, and `ESCALATION` is declared in the pack
+and emitted by nothing. Whatever comes next, the margin is now gated, so it has
+to declare what it costs.
 
 ## Caveats
 
