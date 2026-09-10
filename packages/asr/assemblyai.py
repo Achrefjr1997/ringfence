@@ -193,14 +193,19 @@ class AssemblyAIStream:
                 if kind == "Begin":
                     self._session_id = str(msg.get("id", self._session_id))
                 elif kind == "Turn":
-                    self._turns.put_nowait(
-                        _turn_from_message(
-                            msg,
-                            session_id=self._session_id,
-                            leg_id=self._spec.leg_id,
-                            language=self._spec.language,
-                        )
+                    turn = _turn_from_message(
+                        msg,
+                        session_id=self._session_id,
+                        leg_id=self._spec.leg_id,
+                        language=self._spec.language,
                     )
+                    # v3 sends a Turn on every partial update of the current
+                    # utterance; forward only the settled turn -- the
+                    # formatted one when format_turns is on -- so downstream
+                    # (role attribution, the transcript UI) sees each
+                    # utterance once, not a growing ladder of prefixes.
+                    if turn.is_final and (turn.is_formatted or not self._spec.format_turns):
+                        self._turns.put_nowait(turn)
                 elif kind == "Error":
                     self._fatal = str(msg.get("error", "unknown error"))
                     return
