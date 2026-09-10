@@ -13,15 +13,31 @@ class EvidenceWindow:
     age_decay must answer "how fresh is the current evidence", not how
     old the first sighting was. Repetition is ESCALATION's job, not
     summation's.
+
+    ``occurrences`` is how ESCALATION does that job: every sighting's
+    timestamp, pruned on the same cutoff as ``hits``. It is deliberately
+    kept alongside rather than folded in, so ``hits`` — and therefore
+    decay, ``has()`` and every combo call site — behaves exactly as before.
     """
 
     span_s: float = 180.0
     hits: dict[tuple[str, Role], SignalHit] = field(default_factory=dict)
+    occurrences: dict[tuple[str, Role], list[float]] = field(default_factory=dict)
 
     def add(self, hit: SignalHit) -> None:
-        self.hits[(hit.signal_id, hit.role)] = hit
+        key = (hit.signal_id, hit.role)
+        self.hits[key] = hit
+        self.occurrences.setdefault(key, []).append(hit.t)
         cutoff = hit.t - self.span_s
         self.hits = {k: h for k, h in self.hits.items() if h.t >= cutoff}
+        pruned = {k: [t for t in ts if t >= cutoff] for k, ts in self.occurrences.items()}
+        self.occurrences = {k: ts for k, ts in pruned.items() if ts}
+
+    def repeats(self, now: float) -> dict[tuple[str, Role], int]:
+        """How many times each (signal, role) has fired inside the window."""
+        cutoff = now - self.span_s
+        counts = {k: sum(1 for t in ts if t >= cutoff) for k, ts in self.occurrences.items()}
+        return {k: n for k, n in counts.items() if n}
 
     def has(self, signal_id: str, within_s: float, now: float, role: Role = "CALLER") -> bool:
         hit = self.hits.get((signal_id, role))

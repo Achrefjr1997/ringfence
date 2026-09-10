@@ -97,6 +97,26 @@ def test_fails_when_a_benign_call_reaches_alert() -> None:
     assert any("ALERT+" in f for f in fails), fails
 
 
+def test_fails_when_more_benign_calls_sit_above_the_alert_line() -> None:
+    """Neither FPR nor the margin can see this one.
+
+    A benign call can peak above ALERT and never reach ALERT state, because
+    sustain_turns requires two consecutive turns.  FPR counts state, so it
+    stays 0.000; the margin tracks only the maximum, so it does not move
+    when the *second* such call appears.  Count them.
+    """
+
+    def push_two_over(r: dict) -> None:
+        pushed = 0
+        for it in r["items"]:
+            if it["label"] == "benign" and pushed < 2:
+                it["peak_score"] = 60.0  # over ALERT (55), under INTERVENE (75)
+                pushed += 1
+
+    fails = check_gate(_metrics(BASE), _metrics(_worsen(push_two_over)))
+    assert any("above the ALERT line" in f for f in fails), fails
+
+
 def test_benign_margin_improving_passes() -> None:
     b = _metrics(BASE)
     c = copy.deepcopy(b)
