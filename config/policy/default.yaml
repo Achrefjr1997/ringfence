@@ -27,6 +27,14 @@ signals:
   OFFER_CALLBACK: { weight: -25 }
   NO_ACTION_ASKED: { weight: -20 }
   BRANCH_REFERRAL: { weight: -15 }
+  # Dialogue acts: the same move the lexicon spells out phrase by phrase,
+  # matched as (verb x target).  Weighted below their lexical counterparts
+  # (VERIF_INVERT 30 / RAIL_UNUSUAL 25) because the two overlap on the
+  # phrasings the lexicon already knows -- these earn their keep on the ones
+  # it does not.
+  ACT_DEMAND_SECRET: { weight: 10 }
+  ACT_DEMAND_RAIL: { weight: 10 }
+  ACT_REFUSAL: { weight: -25 }
 combos:
   COMBO_CRITICAL: { bonus: 35, window_s: 90 }
   COMBO_ISOLATION: { bonus: 20, window_s: 60 }

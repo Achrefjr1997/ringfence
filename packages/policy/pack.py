@@ -20,6 +20,10 @@ KNOWN_SIGNAL_IDS = frozenset(
         "OFFER_CALLBACK",
         "NO_ACTION_ASKED",
         "BRANCH_REFERRAL",
+        # dialogue acts (§6.2) -- composed verb x target, not enumerated phrases
+        "ACT_DEMAND_SECRET",
+        "ACT_DEMAND_RAIL",
+        "ACT_REFUSAL",
     }
 )
 

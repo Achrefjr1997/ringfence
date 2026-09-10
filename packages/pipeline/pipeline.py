@@ -26,6 +26,7 @@ from packages.risk.combos import evaluate_combos
 from packages.risk.derived import evaluate_derived, evaluate_escalation
 from packages.intervene.cases import CaseStore
 from packages.risk.judge import DialogueWindow, Judge, should_trigger
+from packages.risk.dialogue_acts import DialogueActExtractor
 from packages.risk.lexical import LexicalExtractor
 from packages.risk.lexicons import load_lexicons
 from packages.risk.numeric import NumericExtractor
@@ -117,6 +118,7 @@ class Pipeline:
                 lexicons.setdefault(sid, []).extend(spec.extra_terms)
         self._lexical = LexicalExtractor(lexicons, weights)
         self._numeric = NumericExtractor(weights)
+        self._acts = DialogueActExtractor(weights, language=lang)
         self._machine = RiskStateMachine(self._pack, session_id=desc.session_id)
 
         stream_spec = StreamSpec(
@@ -178,7 +180,11 @@ class Pipeline:
                 confidence = 1.0
             at = AttributedTurn(turn=turn, role=role, role_confidence=confidence)
             self._transcript.append((at.role, turn.text, turn.t_end))
-            hits = [*self._lexical.extract(at), *self._numeric.extract(at)]
+            hits = [
+                *self._lexical.extract(at),
+                *self._numeric.extract(at),
+                *self._acts.extract(at),
+            ]
             for hit in hits:
                 self._window.add(hit)
 

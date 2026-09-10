@@ -19,6 +19,7 @@ from packages.eval.fixtures import Fixture, fixture_turns, load_fixture
 from packages.policy.pack import PolicyPack, load_pack
 from packages.risk.combos import evaluate_combos
 from packages.risk.derived import evaluate_derived, evaluate_escalation
+from packages.risk.dialogue_acts import DialogueActExtractor
 from packages.risk.lexical import LexicalExtractor
 from packages.risk.lexicons import load_lexicons
 from packages.risk.numeric import NumericExtractor
@@ -146,6 +147,7 @@ def replay_fixture(
             lexicons.setdefault(sid, []).extend(spec.extra_terms)
     lexical = LexicalExtractor(lexicons, weights)
     numeric = NumericExtractor(weights)
+    acts = DialogueActExtractor(weights, language=fx.language)
 
     window = EvidenceWindow()
     machine = RiskStateMachine(pack, session_id=fx.id)
@@ -159,7 +161,7 @@ def replay_fixture(
 
     for turn, ft in zip(fixture_turns(fx), fx.turns, strict=True):
         at = AttributedTurn(turn=turn, role=ft.role, role_confidence=1.0)
-        hits = [*lexical.extract(at), *numeric.extract(at)]
+        hits = [*lexical.extract(at), *numeric.extract(at), *acts.extract(at)]
         for hit in hits:
             window.add(hit)
 
