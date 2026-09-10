@@ -22,6 +22,7 @@ from packages.ingress.siprec.sipmsg import (
     parse_message,
     split_multipart,
 )
+from packages.ingress.siprec.srs import SiprecSession, SiprecSrs
 
 __all__ = [
     "Participant",
@@ -31,6 +32,8 @@ __all__ = [
     "SdpOffer",
     "SeqReorderer",
     "SipMessage",
+    "SiprecSession",
+    "SiprecSrs",
     "Stream",
     "alaw_decode",
     "build_answer",
