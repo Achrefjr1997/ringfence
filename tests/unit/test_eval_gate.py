@@ -67,6 +67,43 @@ def test_fails_on_per_language_fpr_ceiling() -> None:
     assert any(f.startswith("en:") and "FPR" in f for f in fails)
 
 
+def test_fails_when_benign_headroom_shrinks() -> None:
+    """Recall and FPR can both look perfect while headroom is spent.
+
+    On the external corpus FPR is 0.000 at every threshold, yet one benign
+    call peaks at 68.1 -- above ALERT, held down only by hysteresis.  A gate
+    that watches only threshold crossings cannot see a corpus creeping up to
+    the line, so it would wave through the change that finally crosses it.
+    """
+
+    def crowd_the_threshold(r: dict) -> None:
+        for it in r["items"]:
+            if it["label"] == "benign":
+                it["peak_score"] = 54.0  # just under ALERT: no FPR, no headroom
+                break
+
+    fails = check_gate(_metrics(BASE), _metrics(_worsen(crowd_the_threshold)))
+    assert any("benign peak margin" in f for f in fails), fails
+
+
+def test_fails_when_a_benign_call_reaches_alert() -> None:
+    def alert_on_benign(r: dict) -> None:
+        for it in r["items"]:
+            if it["label"] == "benign":
+                it["peak_state"] = "ALERT"
+                break
+
+    fails = check_gate(_metrics(BASE), _metrics(_worsen(alert_on_benign)))
+    assert any("ALERT+" in f for f in fails), fails
+
+
+def test_benign_margin_improving_passes() -> None:
+    b = _metrics(BASE)
+    c = copy.deepcopy(b)
+    c["aggregate"]["benign_peak_margin"] = b["aggregate"]["benign_peak_margin"] + 10
+    assert check_gate(b, c) == []
+
+
 def test_recall_within_half_a_point_still_passes() -> None:
     # baseline recall is 1.0; a 0.5pp drop is exactly the bound -> still ok
     b = _metrics(BASE)
