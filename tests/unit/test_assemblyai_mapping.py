@@ -100,6 +100,67 @@ async def test_close_flushes_a_partial_tail_above_the_minimum() -> None:
     assert s2._out.qsize() == 1 and len(s2._out.get_nowait()) == 1920
 
 
+class _ScriptedWS:
+    """Yields a fixed list of message dicts as JSON, then stops."""
+
+    def __init__(self, msgs: list[dict]) -> None:
+        self._msgs = list(msgs)
+
+    def __aiter__(self):  # noqa: ANN204
+        return self
+
+    async def __anext__(self) -> str:
+        if not self._msgs:
+            raise StopAsyncIteration
+        return json.dumps(self._msgs.pop(0))
+
+
+def _turn_msg(text: str, *, final: bool, formatted: bool) -> dict:
+    return {
+        "type": "Turn",
+        "turn_order": 0,
+        "transcript": text,
+        "end_of_turn": final,
+        "turn_is_formatted": formatted,
+        "words": [{"text": text, "start": 0, "end": 900, "confidence": 0.9}],
+    }
+
+
+async def test_recv_loop_forwards_only_the_formatted_final_turn() -> None:
+    stream = AssemblyAIStream("k", SPEC)  # SPEC has format_turns default True
+    await stream._recv_loop(  # type: ignore[arg-type]
+        _ScriptedWS(
+            [
+                _turn_msg("can you", final=False, formatted=False),
+                _turn_msg("can you confirm the name", final=False, formatted=False),
+                _turn_msg("can you confirm the name on the account", final=True, formatted=False),
+                _turn_msg("Can you confirm the name on the account?", final=True, formatted=True),
+            ]
+        )
+    )
+    out = []
+    while not stream._turns.empty():
+        out.append(stream._turns.get_nowait())
+    assert [t.text for t in out] == ["Can you confirm the name on the account?"]
+
+
+async def test_recv_loop_forwards_the_unformatted_final_when_formatting_is_off() -> None:
+    spec = StreamSpec(session_id="s1", leg_id="far", language="en", format_turns=False)
+    stream = AssemblyAIStream("k", spec)
+    await stream._recv_loop(  # type: ignore[arg-type]
+        _ScriptedWS(
+            [
+                _turn_msg("hello", final=False, formatted=False),
+                _turn_msg("hello there", final=True, formatted=False),
+            ]
+        )
+    )
+    out = []
+    while not stream._turns.empty():
+        out.append(stream._turns.get_nowait())
+    assert [t.text for t in out] == ["hello there"]
+
+
 async def test_error_message_is_fatal_and_stops_the_recv_loop() -> None:
     stream = AssemblyAIStream("k", SPEC)
 
