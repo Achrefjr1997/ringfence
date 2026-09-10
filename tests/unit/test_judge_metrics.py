@@ -64,7 +64,9 @@ def test_every_config_agrees_with_the_code() -> None:
         for value in pattern.findall(path.read_text(encoding="utf-8", errors="ignore")):
             assert float(value) == DEFAULT_TIMEOUT_S, f"{path} says {value}"
             checked += 1
-    assert checked >= 3, f"expected to find the setting in compose + env, found {checked}"
+    # Only the compose files are tracked -- .env* are gitignored, so CI sees
+    # two occurrences where a working tree with a local env file sees three.
+    assert checked >= 2, f"expected the setting in both compose files, found {checked}"
 
 
 # -- counters ----------------------------------------------------------
