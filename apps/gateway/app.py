@@ -66,6 +66,7 @@ from packages.contracts.settings import get_settings
 from packages.identity.models import User
 from packages.identity.store import IdentityStore, InMemoryIdentityStore
 from packages.intervene.cases import Case, CaseStore, InMemoryCaseStore
+from packages.risk.judge import DEFAULT_TIMEOUT_S as _JUDGE_DEFAULT_TIMEOUT_S
 from packages.obs.metrics import MetricsSnapshot, prometheus_text
 from packages.pipeline.pipeline import Pipeline
 from packages.policy.pack import PolicyPack, load_pack
@@ -162,7 +163,7 @@ def _default_judge_factory() -> JudgeFactory:
         except (OSError, ValueError) as exc:  # a bad KB must not disable the judge
             log.warning("scam knowledge base unavailable (%s) - judge runs without it", exc)
             kb = None
-        timeout_s = float(os.environ.get("RF_JUDGE_TIMEOUT_S", "0.8"))
+        timeout_s = float(os.environ.get("RF_JUDGE_TIMEOUT_S", str(_JUDGE_DEFAULT_TIMEOUT_S)))
         return BoundedJudge(caller, model=pack.judge.model, timeout_s=timeout_s, kb=kb)
 
     return factory
@@ -526,6 +527,7 @@ def create_app(
                 rejected=dict(metrics.rejected),
                 active_by_tenant=dict(by_tenant),
                 asr_breakers=the_router.breaker_states() if the_router is not None else {},
+                judge=getattr(the_judge, "stats", None),
             )
         )
         return PlainTextResponse(body, media_type="text/plain; version=0.0.4")

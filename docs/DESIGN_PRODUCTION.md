@@ -100,10 +100,21 @@ SLOs are contractual. Everything in §13 exists to defend these numbers.
 
 | SLO | Target | Measurement window | Error budget |
 |---|---|---|---|
-| **Warn latency** — trigger utterance to callee-visible warning | p95 ≤ 2.0 s, p99 ≤ 3.5 s | 28 days | 5% of calls may exceed p95 |
+| **Warn latency** — trigger utterance to callee-visible warning | p95 ≤ 2.0 s, p99 ≤ 5.0 s | 28 days | 5% of calls may exceed p95 |
 | **False positive rate** — protected calls reaching `INTERVENE` that were benign | ≤ 0.5% of intervened calls | 28 days rolling | Hard ceiling; breach halts policy rollout |
 | **Detection recall** — confirmed fraud calls warned before the transfer request | ≥ 92% | 28 days | — |
 | **Ingest availability** — media accepted and acknowledged | 99.95% | 28 days | 20 min/month |
+
+**On the warn-latency tail.** The Tier-2 judge is called inline
+(`packages/pipeline/pipeline.py` awaits `judge.evaluate` before the decision
+is scored), with a **4 s** budget agreed 2026-09-10 and set in one place —
+`packages.risk.judge.DEFAULT_TIMEOUT_S`, which `RF_JUDGE_TIMEOUT_S` overrides.
+So the p99 is judge-bound by construction and `p99 ≤ 3.5 s` was not
+achievable; it is now 5.0 s. **p95 is unchanged at 2.0 s** because the judge
+fires only above `trigger_score` and within `max_calls_per_session`, so the
+median turn never waits on it. If that assumption stops holding, the
+histogram in `ringfence_judge_latency_seconds` will say so before the SLO
+does.
 | **Decision availability** — a decision is produced for an ingested call | 99.9% | 28 days | 43 min/month |
 | **Data durability** — audit records | 99.999999999% | annual | — |
 

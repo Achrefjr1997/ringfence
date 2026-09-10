@@ -51,7 +51,7 @@ services:
       RF_ASR_PROVIDER: ${RF_ASR_PROVIDER:-null}
       ASSEMBLYAI_API_KEY: ${ASSEMBLYAI_API_KEY:-}
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
-      RF_JUDGE_TIMEOUT_S: ${RF_JUDGE_TIMEOUT_S:-2.5}  # Ollama Cloud p99 ~2s; 0.8s default times out
+      RF_JUDGE_TIMEOUT_S: ${RF_JUDGE_TIMEOUT_S:-4}  # Ollama Cloud p99 ~2s; 4s is the agreed budget
       RF_RETAIN_TRANSCRIPTS: ${RF_RETAIN_TRANSCRIPTS:-false}
       RF_DATA_ENCRYPTION_KEY: ${RF_DATA_ENCRYPTION_KEY:-}
       # P7 call-audio recording -- OFF unless you have a legal basis + DPA

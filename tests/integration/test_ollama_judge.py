@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from packages.policy.pack import load_pack
-from packages.risk.judge import BoundedJudge, DialogueWindow
+from packages.risk.judge import DEFAULT_TIMEOUT_S, BoundedJudge, DialogueWindow
 from packages.risk.kb import StaticKnowledgeBase
 
 pytestmark = pytest.mark.needs_ollama
@@ -37,7 +37,7 @@ def _key() -> str | None:
     return None
 
 
-def _judge(timeout_s: float = 20.0) -> BoundedJudge:
+def _judge(timeout_s: float = DEFAULT_TIMEOUT_S) -> BoundedJudge:
     if importlib.util.find_spec("ollama") is None:
         pytest.skip("ollama not installed")
     key = _key()
