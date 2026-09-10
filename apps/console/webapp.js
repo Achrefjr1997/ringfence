@@ -168,7 +168,7 @@ async function keysView() {
         tb.append(tr);
       }
       t.append(tb); list.append(t);
-      if (!keys.length) list.append(el("div", { className: "sub", textContent: "no keys yet" }));
+      if (!keys.length) list.append(el("div", { className: "empty", textContent: "no keys yet" }));
     } catch (e) { list.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
   }
   issue.querySelector("#ki").onclick = async () => {
@@ -200,7 +200,7 @@ async function casesView() {
       tb.append(tr);
     }
     t.append(tb); box.append(t);
-    if (!cases.length) box.append(el("div", { className: "sub", textContent: "no cases — run a replay from the Live view" }));
+    if (!cases.length) box.append(el("div", { className: "empty", textContent: "no cases — run a replay from the Live view" }));
   } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
@@ -321,7 +321,7 @@ async function callsView() {
       tb.append(tr);
     }
     t.append(tb); box.append(t);
-    if (!calls.length) box.append(el("div", { className: "sub", textContent: "no calls yet — run one from the Live view" }));
+    if (!calls.length) box.append(el("div", { className: "empty", textContent: "no calls yet — run one from the Live view" }));
   }
 
   async function loadUsers() {
@@ -338,7 +338,7 @@ async function callsView() {
       tb.append(tr);
     }
     t.append(tb); box.append(t);
-    if (!rows.length) box.append(el("div", { className: "sub", textContent: "no calls attributed to an employee yet — the integration passes ?user=<id> on /ws/capture" }));
+    if (!rows.length) box.append(el("div", { className: "empty", textContent: "no calls attributed to an employee yet — the integration passes ?user=<id> on /ws/capture" }));
   }
 
   async function load() {
@@ -411,7 +411,7 @@ function accessLogPanel(sid) {
   p.innerHTML = `<div class="lbl" style="margin-bottom:10px">Access log</div><div id="alog" class="sub">loading…</div>`;
   const box = p.querySelector("#alog");
   api(`/calls/${encodeURIComponent(sid)}/access-log`).then((rows) => {
-    if (!rows.length) { box.textContent = "no access recorded yet"; return; }
+    if (!rows.length) { box.className = "empty"; box.textContent = "no access recorded yet"; return; }
     box.innerHTML = "";
     for (const r of rows) {
       box.append(el("div", { className: "mono", style: "font-size:12px;color:var(--t2);margin:2px 0",
@@ -476,7 +476,7 @@ function commentsPanel(sid) {
       thread.innerHTML = "";
       const tops = all.filter((c) => !c.parent_id);
       const kids = (id) => all.filter((c) => c.parent_id === id);
-      if (!tops.length) thread.innerHTML = `<span class="sub">no comments yet</span>`;
+      if (!tops.length) thread.innerHTML = `<div class="empty">no comments yet</div>`;
       for (const c of tops) { thread.append(node(c, false)); for (const k of kids(c.id)) thread.append(node(k, true)); }
     } catch (e) { thread.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
   }
@@ -553,7 +553,7 @@ async function employeeView(ref) {
       tb.append(tr);
     }
     t.append(tb); box.append(t);
-    if (!calls.length) box.append(el("div", { className: "sub", textContent: "no calls for this employee" }));
+    if (!calls.length) box.append(el("div", { className: "empty", textContent: "no calls for this employee" }));
     box.append(el("a", { href: "#/calls", textContent: "← all calls", style: "display:inline-block;margin-top:16px;font-size:13px" }));
   } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
@@ -566,7 +566,7 @@ function wallView() {
   shell("#/wall", m);
   const grid = el("div", { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px" });
   m.append(grid);
-  const empty = el("div", { className: "sub" }); empty.textContent = "no live calls"; m.append(empty);
+  const empty = el("div", { className: "empty" }); empty.textContent = "no live calls"; m.append(empty);
   const cards = new Map();
 
   function render(list) {
