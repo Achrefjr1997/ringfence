@@ -11,6 +11,14 @@ templates:
     en: "Stop. Never read a code, PIN, or card number to someone who called you."
     fr: "Arrêtez. Ne communiquez jamais un code, un code secret ni un numéro de carte à quelqu'un qui vous a appelé."
     ar_tn: "أوقف. عمرك ما تقرا كود ولا رقم سري ولا رقم بطاقة لواحد هو اللي كلمك."
+  ACT_DEMAND_SECRET:
+    en: "Stop. Never read a code, PIN, or card number to someone who called you."
+    fr: "Arrêtez. Ne communiquez jamais un code, un code secret ni un numéro de carte à quelqu'un qui vous a appelé."
+    ar_tn: "أوقف. عمرك ما تقرا كود ولا رقم سري ولا رقم بطاقة لواحد هو اللي كلمك."
+  ACT_DEMAND_RAIL:
+    en: "Stop. A bank will never ask you to buy gift cards or move money to a safe account."
+    fr: "Arrêtez. Une banque ne vous demandera jamais d'acheter des cartes ni de transférer vers un compte sécurisé."
+    ar_tn: "أوقف. البنك عمرو ما يطلب منك تشري كارتات ولا تحوّل فلوس لحساب آخر."
   RAIL_UNUSUAL:
     en: "Stop. A bank will never ask you to buy gift cards or move money to a safe account."
     fr: "Arrêtez. Une banque ne vous demandera jamais d'acheter des cartes ni de transférer vers un compte securise."
@@ -47,6 +55,10 @@ templates:
     en: "Good — a real bank never asks for your code. Still, end the call and dial your bank yourself to be sure."
     fr: "Bien — une vraie banque ne demande jamais votre code. Terminez quand meme l'appel et rappelez votre banque vous-meme."
     ar_tn: "باهي — البنك الحقيقي عمرو ما يطلب الكود. برشا، اقطع المكالمة واتصل بالبنك بروحك باش تتأكد."
+  ACT_REFUSAL:
+    en: "Good — you were right to refuse. End the call and dial your bank yourself to be sure."
+    fr: "Bien — vous avez eu raison de refuser. Terminez l'appel et rappelez votre banque vous-même."
+    ar_tn: "باهي — عملت صح كي رفضت. اقطع المكالمة واتصل بالبنك بروحك باش تتأكد."
   OFFER_CALLBACK:
     en: "Take them up on it: hang up and call back the official number on your card."
     fr: "Acceptez : raccrochez et rappelez le numero officiel au dos de votre carte."
