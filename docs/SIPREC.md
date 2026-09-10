@@ -93,16 +93,26 @@ audio retention being on — a recording. A `docker-compose.siprec.yml` overlay
 + a configurable RTP port range (for an external FreeSWITCH/Asterisk SRC) come
 with P4.
 
-### P4 — admission + signalling enrichment
+### P4 — carrier mode, attribution, admission, metrics ✅ (PR #57)
 
-* metadata `<participant>` numbers → `Signalling` (caller/callee E.164, trunk,
-  attestation) on the session descriptor → §6.4 enrichment.
-* consent-token check (§3.6) before the first frame; rejections counted per
-  reason.
-* `Mode.CARRIER` on the `SessionDescriptor`; SRS metrics (`siprec_sessions`,
-  `siprec_rtp_lost`, `siprec_reorder_depth`).
-* configurable RTP port range + `infra/compose/docker-compose.siprec.yml`
-  overlay for pointing FreeSWITCH `mod_siprec` / Asterisk at the SRS.
+* **`mode=carrier`** — `/ws/capture` reads a `mode=` hint (`carrier` /
+  `enterprise`, else `SDK` as before); the uplink sends `carrier`, so the
+  `SessionDescriptor` / `SessionSnapshot` carry `Mode.CARRIER`.
+* **Callee attribution** — `RecordingMetadata.other_participant(caller_aor=…)`
+  is the non-caller; the uplink passes its AOR / name as `user=` / `user_label=`
+  so a carrier call is attributed in the console.
+* **Consent** — `RF_SIPREC_CONSENT_TOKEN`, when set, is passed as `consent=`
+  (`admit()` already enforces it in the §3.6 order).
+* **RTP port range** — `SiprecSrs(rtp_port_range=(lo, hi))` /
+  `RF_SIPREC_RTP_PORTS=35000-35099`; ephemeral when unset. An external SBC can
+  now be firewalled to a known span.
+* **Metrics** — `SiprecSrs.stats()` (`siprec_sessions_total` / `_active`,
+  `siprec_rtp_packets_total`, `siprec_rtp_lost_total`,
+  `siprec_reorder_depth_max`) exposed by a dependency-free Prometheus text
+  endpoint in `apps/siprec` (`RF_SIPREC_METRICS_PORT`, default 9105).
+* **`infra/compose/docker-compose.siprec.yml`** — overlay on
+  `docker-compose.prod.yml` running `python -m apps.siprec` on the gateway
+  image; udp/5060 + the RTP range published, `/metrics` on 9105.
 
 ---
 

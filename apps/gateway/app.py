@@ -1124,6 +1124,11 @@ def create_app(
         # that tenant's own data
         user_ref = (ws.query_params.get("user") or ws.headers.get("x-ringfence-user") or "")[:200]
         user_label = (ws.query_params.get("user_label") or "")[:200]
+        # ingress kind — the SIPREC adapter sends mode=carrier (two labelled
+        # legs); the browser SDK leaves it unset
+        mode = {"carrier": Mode.CARRIER, "enterprise": Mode.ENTERPRISE}.get(
+            ws.query_params.get("mode", ""), Mode.SDK
+        )
 
         tenant, reason, key_id = admit(
             api_key=api_key, tenant_hint=ws.query_params.get("tenant", ""), consent=consent
@@ -1156,7 +1161,7 @@ def create_app(
                 SessionDescriptor(
                     session_id=session,
                     tenant_id=tenant,
-                    mode=Mode.SDK,
+                    mode=mode,
                     legs=(LegSpec(leg_id=leg, role_hint=role, sample_rate=_RATE),),
                     started_at=time.time(),
                     language="en",

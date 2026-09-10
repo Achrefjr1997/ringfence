@@ -1,0 +1,34 @@
+# SIPREC ingress -- optional overlay on docker-compose.prod.yml (docs/SIPREC.md P4).
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.local-prod.yml \
+#     -f docker-compose.siprec.yml --env-file .env.local-prod up -d siprec
+#
+# Reuses the gateway image (apps/siprec ships in it) and runs `python -m
+# apps.siprec`.  Point a FreeSWITCH `mod_siprec` / Asterisk `res_pjsip`
+# recording client at udp/5060 on this host; RTP lands in RF_SIPREC_RTP_PORTS.
+#
+# RF_SIPREC_API_KEY is required -- issue one in the console (Keys tab) for the
+# tenant whose calls the SBC forks.  RF_SIPREC_ADVERTISE_IP must be the address
+# the SBC can reach (the Docker host's LAN IP, not 127.0.0.1).
+
+services:
+  siprec:
+    image: ghcr.io/achrefjr1997/ringfence-gateway:${RF_IMAGE_TAG:-local}
+    restart: unless-stopped
+    depends_on:
+      gateway: {condition: service_started}
+    command: ["python", "-m", "apps.siprec"]
+    environment:
+      RF_SIPREC_BIND: "0.0.0.0:5060"
+      RF_SIPREC_ADVERTISE_IP: ${RF_SIPREC_ADVERTISE_IP:-127.0.0.1}
+      RF_GATEWAY_WS: ws://gateway:8000/ws/capture
+      RF_SIPREC_API_KEY: ${RF_SIPREC_API_KEY:?set RF_SIPREC_API_KEY}
+      RF_SIPREC_CALLER_AOR: ${RF_SIPREC_CALLER_AOR:-}
+      RF_SIPREC_TENANT: ${RF_SIPREC_TENANT:-}
+      RF_SIPREC_CONSENT_TOKEN: ${RF_SIPREC_CONSENT_TOKEN:-}
+      RF_SIPREC_RTP_PORTS: ${RF_SIPREC_RTP_PORTS:-35000-35099}
+      RF_SIPREC_METRICS_PORT: "9105"
+    ports:
+      - "5060:5060/udp"
+      - "${RF_SIPREC_RTP_PORTS:-35000-35099}:${RF_SIPREC_RTP_PORTS:-35000-35099}/udp"
+    expose: ["9105"]
