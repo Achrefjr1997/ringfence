@@ -69,6 +69,7 @@ class _Leg:
     reorderer: SeqReorderer[RtpPacket]
     normaliser: AudioNormaliser
     transport: asyncio.DatagramTransport
+    lost_seen: int = 0  # reorderer.lost already folded into SiprecSrs.rtp_lost
 
 
 @dataclass
@@ -117,6 +118,10 @@ class SiprecSrs:
     calling party, streams resolve to ``far`` (caller) / ``near`` (callee)
     exactly.  Without it a leg is passed through as ``leg-<label>`` and the
     capture path attributes turns acoustically (degraded, never wrong).
+
+    ``rtp_port_range`` — ``(lo, hi)`` inclusive to allocate RTP sockets from a
+    fixed span (so an external SBC can be firewalled to it); ``None`` uses an
+    ephemeral port per stream.
     """
 
     def __init__(
@@ -127,18 +132,36 @@ class SiprecSrs:
         on_session_end: OnSessionEnd | None = None,
         advertise_ip: str = "127.0.0.1",
         caller_aor: str | None = None,
+        rtp_port_range: tuple[int, int] | None = None,
     ) -> None:
         self._on_audio = on_audio
         self._on_start = on_session_start
         self._on_end = on_session_end
         self._advertise_ip = advertise_ip
         self._caller_aor = caller_aor
+        self._rtp_lo, self._rtp_hi = rtp_port_range or (0, 0)
+        self._rtp_next = self._rtp_lo
 
         self._sip_transport: asyncio.DatagramTransport | None = None
         self._dialogs: dict[str, _Dialog] = {}
         self._tasks: set[asyncio.Task[object]] = set()
         self._host = "127.0.0.1"
         self._port = 0
+
+        # observability (P4) — read via ``stats``
+        self.sessions_total = 0
+        self.rtp_packets = 0
+        self.rtp_lost = 0
+        self.reorder_depth_max = 0
+
+    def stats(self) -> dict[str, int]:
+        return {
+            "siprec_sessions_total": self.sessions_total,
+            "siprec_sessions_active": len(self._dialogs),
+            "siprec_rtp_packets_total": self.rtp_packets,
+            "siprec_rtp_lost_total": self.rtp_lost,
+            "siprec_reorder_depth_max": self.reorder_depth_max,
+        }
 
     # -- lifecycle -------------------------------------------------------
 
@@ -242,9 +265,7 @@ class SiprecSrs:
             if pt is None:
                 ports.append(0)
                 continue
-            rtp_transport, _ = await loop.create_datagram_endpoint(
-                self._rtp_factory(dialog, leg_id), local_addr=(self._host, 0)
-            )
+            rtp_transport = await self._bind_rtp(loop, self._rtp_factory(dialog, leg_id))
             local_port = rtp_transport.get_extra_info("sockname")[1]
             ports.append(local_port)
             dialog.legs[leg_id] = _Leg(
@@ -268,6 +289,7 @@ class SiprecSrs:
         )
         dialog.last_ok = response
         self._dialogs[call_id] = dialog
+        self.sessions_total += 1
         dialog.pump = asyncio.ensure_future(self._pump(dialog))
         self._send(response, peer)
 
@@ -292,6 +314,25 @@ class SiprecSrs:
 
         return lambda: _RtpProtocol(on_packet)
 
+    async def _bind_rtp(
+        self, loop: asyncio.AbstractEventLoop, factory: Callable[[], _RtpProtocol]
+    ) -> asyncio.DatagramTransport:
+        if self._rtp_hi <= self._rtp_lo:
+            transport, _ = await loop.create_datagram_endpoint(factory, local_addr=(self._host, 0))
+            return transport
+        span = self._rtp_hi - self._rtp_lo + 1
+        for _ in range(span):
+            port = self._rtp_next
+            self._rtp_next = self._rtp_lo + (self._rtp_next - self._rtp_lo + 1) % span
+            try:
+                transport, _ = await loop.create_datagram_endpoint(
+                    factory, local_addr=(self._host, port)
+                )
+                return transport
+            except OSError:
+                continue
+        raise OSError(f"no free RTP port in {self._rtp_lo}-{self._rtp_hi}")
+
     def _on_rtp(self, dialog: _Dialog, leg_id: str, raw: bytes) -> None:
         if dialog.ended:
             return
@@ -302,11 +343,15 @@ class SiprecSrs:
         leg = dialog.legs.get(leg_id)
         if leg is None:
             return
+        self.rtp_packets += 1
         for ordered in leg.reorderer.push(pkt.sequence, pkt):
             samples = decode(ordered.payload, leg.payload_type)
             for frame in leg.normaliser.process(samples.astype("<i2").tobytes()):
                 with contextlib.suppress(asyncio.QueueFull):
                     dialog.queue.put_nowait((leg_id, frame))
+        self.rtp_lost += leg.reorderer.lost - leg.lost_seen
+        leg.lost_seen = leg.reorderer.lost
+        self.reorder_depth_max = max(self.reorder_depth_max, leg.reorderer.pending)
 
     async def _pump(self, dialog: _Dialog) -> None:
         while True:

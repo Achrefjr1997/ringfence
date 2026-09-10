@@ -121,6 +121,11 @@ class SeqReorderer(Generic[T]):
             out.extend(self._drain())
         return out
 
+    @property
+    def pending(self) -> int:
+        """Packets currently held waiting on an earlier sequence number."""
+        return len(self._pending)
+
     def flush(self) -> list[T]:
         if self._next is None:
             return []

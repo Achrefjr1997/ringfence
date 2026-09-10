@@ -126,6 +126,19 @@ def test_calls_are_attributed_to_the_employee_the_integration_names(client: Test
     assert users["alice@corp"]["calls"] == 1 and users["alice@corp"]["user_label"] == "Alice"
 
 
+def test_capture_accepts_a_carrier_mode_hint(client: TestClient) -> None:
+    token, _ = _admin(client)
+    key = client.post("/orgs/keys", json={"name": "gw"}, headers=_h(token)).json()
+    # the SIPREC adapter sends mode=carrier; an unknown value must not break admission
+    for sid, mode in (("m1", "carrier"), ("m2", "bogus")):
+        with client.websocket_connect(
+            f"/ws/capture?session={sid}&leg=far&key={key['key']}&mode={mode}"
+        ) as ws:
+            ws.send_bytes(b"\x00\x00" * 160)
+    rows = {c["session_id"] for c in client.get("/calls", headers=_h(token)).json()}
+    assert rows == {"m1", "m2"}
+
+
 def test_calls_require_auth(client: TestClient) -> None:
     assert client.get("/calls").status_code == 401
     assert client.get("/calls/x").status_code == 401

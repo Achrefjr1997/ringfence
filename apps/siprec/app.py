@@ -26,6 +26,13 @@ from packages.ingress.siprec.srs import SiprecSession, SiprecSrs
 log = logging.getLogger("ringfence.siprec")
 
 
+def _port_range(spec: str) -> tuple[int, int] | None:
+    lo, _, hi = spec.partition("-")
+    if lo.isdigit() and hi.isdigit() and int(lo) <= int(hi):
+        return int(lo), int(hi)
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class Config:
     bind_host: str = "0.0.0.0"  # noqa: S104 — a recording server listens for the SBC
@@ -35,12 +42,16 @@ class Config:
     api_key: str = ""
     caller_aor: str | None = None
     tenant: str | None = None
+    consent_token: str | None = None
+    rtp_port_range: tuple[int, int] | None = None
+    metrics_port: int = 9105  # 0 disables the /metrics listener
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
         e = env if env is not None else os.environ
         bind = e.get("RF_SIPREC_BIND", "0.0.0.0:5060")
         host, _, port = bind.rpartition(":")
+        metrics = e.get("RF_SIPREC_METRICS_PORT", "9105")
         return cls(
             bind_host=host or "0.0.0.0",  # noqa: S104
             bind_port=int(port) if port.isdigit() else 5060,
@@ -49,6 +60,9 @@ class Config:
             api_key=e.get("RF_SIPREC_API_KEY", ""),
             caller_aor=e.get("RF_SIPREC_CALLER_AOR") or None,
             tenant=e.get("RF_SIPREC_TENANT") or None,
+            consent_token=e.get("RF_SIPREC_CONSENT_TOKEN") or None,
+            rtp_port_range=_port_range(e.get("RF_SIPREC_RTP_PORTS", "")),
+            metrics_port=int(metrics) if metrics.isdigit() else 9105,
         )
 
 
@@ -90,9 +104,11 @@ class SiprecUplink:
             on_session_end=self._on_end,
             advertise_ip=config.advertise_ip,
             caller_aor=config.caller_aor,
+            rtp_port_range=config.rtp_port_range,
         )
         self._legs: dict[tuple[str, str], _LegWs] = {}
         self._opening: dict[tuple[str, str], asyncio.Lock] = {}
+        self._attrib: dict[str, tuple[str, str]] = {}  # session_id -> (user_ref, user_label)
 
     async def start(self) -> tuple[str, int]:
         return await self._srs.start(self._cfg.bind_host, self._cfg.bind_port)
@@ -104,12 +120,22 @@ class SiprecUplink:
         )
         self._legs.clear()
 
+    def stats(self) -> dict[str, int]:
+        return self._srs.stats()
+
     # -- SRS callbacks ------------------------------------------------
 
     async def _on_start(self, session: SiprecSession) -> None:
         log.info(
             "session %s up — call-id=%s legs=%s", session.session_id, session.call_id, session.legs
         )
+        if session.metadata is not None:
+            callee = session.metadata.other_participant(caller_aor=self._cfg.caller_aor)
+            if callee is not None and (callee.aor or callee.name):
+                self._attrib[session.session_id] = (
+                    (callee.aor or callee.participant_id)[:200],
+                    (callee.name or "")[:200],
+                )
         for leg in session.legs:
             await self._ensure(session.session_id, leg)
 
@@ -120,6 +146,7 @@ class SiprecUplink:
 
     async def _on_end(self, session_id: str, reason: str) -> None:
         log.info("session %s down — %s", session_id, reason)
+        self._attrib.pop(session_id, None)
         for key in [k for k in self._legs if k[0] == session_id]:
             await self._legs.pop(key).close()
 
@@ -133,9 +160,14 @@ class SiprecUplink:
         async with lock:
             if key in self._legs:
                 return self._legs[key]
-            query = {"session": session_id, "leg": leg, "key": self._cfg.api_key}
+            query = {"session": session_id, "leg": leg, "key": self._cfg.api_key, "mode": "carrier"}
             if self._cfg.tenant:
                 query["tenant"] = self._cfg.tenant
+            if self._cfg.consent_token:
+                query["consent"] = self._cfg.consent_token
+            attrib = self._attrib.get(session_id)
+            if attrib:
+                query["user"], query["user_label"] = attrib
             url = f"{self._cfg.gateway_ws}?{urlencode(query)}"
             try:
                 ws = await connect(url, open_timeout=5)
@@ -148,6 +180,36 @@ class SiprecUplink:
             return leg_ws
 
 
+def _prometheus(stats: Mapping[str, int]) -> bytes:
+    lines: list[str] = []
+    for name, value in stats.items():
+        kind = "gauge" if name.endswith("_active") or name.endswith("_max") else "counter"
+        lines += [f"# TYPE {name} {kind}", f"{name} {value}"]
+    return ("\n".join(lines) + "\n").encode()
+
+
+async def serve_metrics(uplink: SiprecUplink, port: int, host: str = "0.0.0.0") -> asyncio.Server:  # noqa: S104
+    """A dependency-free Prometheus text endpoint: any request -> the SRS counters."""
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        with contextlib.suppress(Exception):
+            await reader.read(4096)  # drain the request line/headers, ignore them
+            body = _prometheus(uplink.stats())
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\n"
+                b"Content-Length: "
+                + str(len(body)).encode()
+                + b"\r\nConnection: close\r\n\r\n"
+                + body
+            )
+            await writer.drain()
+        with contextlib.suppress(Exception):
+            writer.close()
+            await writer.wait_closed()
+
+    return await asyncio.start_server(handle, host, port)
+
+
 async def run(config: Config | None = None) -> None:
     cfg = config or Config.from_env()
     if not cfg.api_key:
@@ -155,6 +217,10 @@ async def run(config: Config | None = None) -> None:
     uplink = SiprecUplink(cfg)
     host, port = await uplink.start()
     log.info("SIPREC SRS on udp/%s:%d -> %s", host, port, cfg.gateway_ws)
+
+    metrics = await serve_metrics(uplink, cfg.metrics_port) if cfg.metrics_port else None
+    if metrics is not None:
+        log.info("metrics on http://0.0.0.0:%d/metrics", cfg.metrics_port)
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -164,4 +230,7 @@ async def run(config: Config | None = None) -> None:
     try:
         await stop.wait()
     finally:
+        if metrics is not None:
+            metrics.close()
+            await metrics.wait_closed()
         await uplink.close()

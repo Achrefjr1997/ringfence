@@ -145,6 +145,32 @@ async def test_srs_invite_rtp_bye_roundtrip() -> None:
     assert all(sid == "sess-ABC--" for sid, _leg, _n in frames)
     assert ends == [("sess-ABC--", "bye")]
 
+    s = srs.stats()
+    assert s["siprec_sessions_total"] == 1
+    assert s["siprec_sessions_active"] == 0  # torn down on BYE
+    assert s["siprec_rtp_packets_total"] == 20  # 10 per leg
+    assert s["siprec_rtp_lost_total"] == 0
+
+
+async def test_srs_allocates_rtp_from_a_configured_port_range() -> None:
+    srs = SiprecSrs(on_audio=_noop, caller_aor="sip:bob@biloxi.com", rtp_port_range=(41000, 41019))
+    host, port = await srs.start()
+    loop = asyncio.get_running_loop()
+    sbc = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sbc.bind(("127.0.0.1", 0))
+    sbc.setblocking(False)
+    try:
+        await loop.sock_sendto(sbc, _invite((host, port), sbc.getsockname()[1]), (host, port))
+        ok = await asyncio.wait_for(loop.sock_recvfrom(sbc, 65535), timeout=2.0)
+        rtp_ports = _answer_ports(ok[0])
+        assert len(rtp_ports) == 2
+        assert all(41000 <= p <= 41019 for p in rtp_ports)
+        await loop.sock_sendto(sbc, _bye((host, port)), (host, port))
+        await asyncio.wait_for(loop.sock_recvfrom(sbc, 65535), timeout=2.0)
+    finally:
+        sbc.close()
+        await srs.close()
+
 
 async def test_srs_answers_options_keepalive() -> None:
     srs = SiprecSrs(on_audio=_noop)

@@ -64,6 +64,17 @@ class RecordingMetadata:
                 return p
         return None
 
+    def other_participant(
+        self, *, caller_aor: str | None = None, caller_participant_id: str | None = None
+    ) -> Participant | None:
+        """The participant that is *not* the caller — the called (protected)
+        party.  Returns ``None`` if the caller is unknown or there aren't
+        exactly two participants."""
+        caller = self._resolve_participant(aor=caller_aor, participant_id=caller_participant_id)
+        if caller is None or len(self.participants) != 2:
+            return None
+        return next(p for p in self.participants if p.participant_id != caller.participant_id)
+
     def caller_label(
         self, *, caller_aor: str | None = None, caller_participant_id: str | None = None
     ) -> str | None:

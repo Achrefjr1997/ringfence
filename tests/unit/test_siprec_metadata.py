@@ -62,3 +62,16 @@ def test_leg_for_label_degrades_to_none_without_a_caller_hint() -> None:
 def test_leg_for_label_none_for_unknown_label() -> None:
     md = parse_recording_metadata(_XML)
     assert md.leg_for_label("999", caller_aor="sip:bob@biloxi.com") is None
+
+
+def test_other_participant_is_the_non_caller() -> None:
+    md = parse_recording_metadata(_XML)
+    callee = md.other_participant(caller_aor="sip:bob@biloxi.com")
+    assert callee is not None and callee.aor == "sip:paul@example.com"
+    by_id = md.other_participant(caller_participant_id="zSfPoSvdSDCmU3A3TRDxAw==")
+    assert by_id is not None and by_id.aor == "sip:bob@biloxi.com"
+
+
+def test_other_participant_none_when_caller_unknown() -> None:
+    md = parse_recording_metadata(_XML)
+    assert md.other_participant(caller_aor="sip:nobody@nowhere") is None

@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlparse
 import numpy as np
 from websockets.asyncio.server import serve
 
-from apps.siprec.app import Config, SiprecUplink
+from apps.siprec.app import Config, SiprecUplink, serve_metrics
 from packages.ingress.siprec.loopback import play_call
 
 
@@ -25,6 +25,10 @@ class _FakeCapture:
             "session": query.get("session", [""])[0],
             "leg": query.get("leg", [""])[0],
             "key": query.get("key", [""])[0],
+            "mode": query.get("mode", [""])[0],
+            "user": query.get("user", [""])[0],
+            "user_label": query.get("user_label", [""])[0],
+            "consent": query.get("consent", [""])[0],
             "frames": 0,
             "bytes": 0,
         }
@@ -50,6 +54,7 @@ async def test_loopback_call_reaches_capture_as_two_tagged_legs() -> None:
         gateway_ws=f"ws://127.0.0.1:{cap_port}/ws/capture",
         api_key="rf_testkey",
         caller_aor="sip:caller@pstn.example",
+        consent_token="consent-xyz",
     )
     uplink = SiprecUplink(cfg)
     srs_addr = await uplink.start()
@@ -73,6 +78,47 @@ async def test_loopback_call_reaches_capture_as_two_tagged_legs() -> None:
     assert all(c["session"] == "loopback" for c in fake.conns)
     assert all(int(c["frames"]) > 0 for c in fake.conns)
     assert all(int(c["bytes"]) % (640 * 2) == 0 for c in fake.conns)  # whole 40 ms frames
+    # P4: carrier mode, consent token, callee attribution
+    assert all(c["mode"] == "carrier" for c in fake.conns)
+    assert all(c["consent"] == "consent-xyz" for c in fake.conns)
+    assert all(c["user"] == "sip:callee@ringfence.example" for c in fake.conns)
+
+    stats = uplink.stats()
+    assert stats["siprec_sessions_total"] == 1
+    assert stats["siprec_rtp_packets_total"] > 0
+
+
+async def test_serve_metrics_exposes_prometheus_text() -> None:
+    fake = _FakeCapture()
+    server = await serve(fake.handler, "127.0.0.1", 0)
+    cfg = Config(
+        bind_host="127.0.0.1",
+        bind_port=0,
+        gateway_ws=f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/ws/capture",
+        api_key="k",
+    )
+    uplink = SiprecUplink(cfg)
+    await uplink.start()
+    metrics = await serve_metrics(uplink, 0, host="127.0.0.1")
+    mport = metrics.sockets[0].getsockname()[1]
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", mport)
+        writer.write(b"GET /metrics HTTP/1.1\r\nHost: x\r\n\r\n")
+        await writer.drain()
+        raw = await asyncio.wait_for(reader.read(-1), timeout=2.0)
+        writer.close()
+        await writer.wait_closed()
+    finally:
+        metrics.close()
+        await metrics.wait_closed()
+        await uplink.close()
+        server.close()
+        await server.wait_closed()
+
+    text = raw.decode()
+    assert text.startswith("HTTP/1.1 200 OK")
+    assert "# TYPE siprec_sessions_total counter" in text
+    assert "siprec_rtp_packets_total 0" in text
 
 
 async def test_uplink_close_is_idempotent_and_hangs_up_cleanly() -> None:
