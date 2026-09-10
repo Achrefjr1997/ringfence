@@ -8,6 +8,7 @@ Exit non-zero on regression:
     fpr_intervene_new       <= min(fpr_base, 0.5%)
     fpr_alert_new           <= min(fpr_alert_base, 1.0%)
     benign_margin_new       >= benign_margin_base - 1.0 point
+    benign_over_alert_new   <= benign_over_alert_base
     per_language_recall_new >= per_language_recall_base - 2pp   # every language
     per_language_fpr_new    <= 0.7%                             # every language
 
@@ -57,6 +58,13 @@ def check_gate(baseline: dict[str, Any], candidate: dict[str, Any]) -> list[str]
         ceiling = min(b_alert, _FPR_ALERT_CEILING) if b_alert is not None else _FPR_ALERT_CEILING
         if c_alert > ceiling:
             fails.append(f"FPR ALERT+ {c_alert:.4f} > min(baseline, 1.0%) = {ceiling:.4f}")
+
+    b_over, c_over = ba.get("benign_over_alert"), ca.get("benign_over_alert")
+    if b_over is not None and c_over is not None and c_over > b_over:
+        fails.append(
+            f"benign calls above the ALERT line {c_over} > baseline {b_over} "
+            f"(held back only by hysteresis; FPR and margin cannot see these)"
+        )
 
     b_margin, c_margin = ba["benign_peak_margin"], ca["benign_peak_margin"]
     if b_margin is not None and c_margin is not None and c_margin < b_margin - _MARGIN_DROP:

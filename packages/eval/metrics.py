@@ -61,6 +61,10 @@ def _slice_metrics(items: list[Item], alert: float) -> dict[str, Any]:
         if benign
         else None,
         "benign_peak_margin": round(alert - max(benign_peaks), 2) if benign_peaks else None,
+        # How many benign calls sit ABOVE the alert line without tripping it.
+        # FPR cannot see these -- hysteresis (sustain_turns) is all that holds
+        # them down -- and neither can the margin, which only tracks the max.
+        "benign_over_alert": sum(1 for p in benign_peaks if p > alert) if benign_peaks else None,
         "role_accuracy": round(role_ok / len(turns), 4) if turns else None,
     }
 
