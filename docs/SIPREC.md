@@ -41,21 +41,26 @@ dep) does the rate conversion. `websockets` (already a dep) is the uplink.
 Full offline unit coverage (`tests/unit/test_siprec_*.py`). No marker — runs in
 the default CI lane.
 
-### P2 — the SRS server `packages/ingress/siprec/srs.py`
+### P2 — the SRS server `packages/ingress/siprec/srs.py` ✅ (PR #55)
 
 `SiprecSrs` — asyncio UDP, modelled on `AudioSocketServer`:
 
-* one SIP dialog: `INVITE` → `200 OK` with the answer SDP → `ACK`; `BYE` →
-  `200 OK`; `OPTIONS` → `200 OK` (SBC keepalive — design §3.2 failure mode);
-  clean `deregister` on shutdown.
-* two RTP receivers (one per answered port). Per packet: `RtpPacket.parse` →
-  `SeqReorderer` → `g711.decode` → `resample_to_16k` → `on_audio(session_id,
-  leg, frame)`.
-* `on_session_start(descriptor)` / `on_session_end(reason)` callbacks carrying
-  the parsed metadata.
+* one SIP dialog: `INVITE` → `200 OK` with the answer SDP → `ACK`; `BYE` /
+  `CANCEL` → `200 OK`; `OPTIONS` → `200 OK` + `Allow` (SBC keepalive — design
+  §3.2 failure mode); retransmitted `INVITE` re-sends the stored `200 OK`;
+  `close()` tears every live dialog down as `"shutdown"`.
+* one RTP receiver per answered port. Per packet: `RtpPacket.parse` →
+  `SeqReorderer` → `g711.decode` → `AudioNormaliser` (shared `SessionNormaliser`
+  across legs — normalise the session, not each leg) → a bounded per-dialog
+  queue → `on_audio(session_id, leg, 40 ms PCM16 @ 16 kHz)`. `datagram_received`
+  never blocks; a full queue drops.
+* `on_session_start(SiprecSession)` / `on_session_end(session_id, reason)`.
+* leg id: `metadata.leg_for_label` + `caller_aor` → `far` / `near`; otherwise
+  `leg-<label>` (capture path falls back to acoustic — degraded, never wrong).
 
-Integration test: in-process SRC double sends a scripted `INVITE` + RTP; assert
-16 kHz / 40 ms frames arrive tagged with the right leg.
+Covered by `tests/unit/test_siprec_srs.py` — a scripted SBC over real
+localhost UDP: `INVITE` + RTP + `BYE`, `OPTIONS` keepalive, `INVITE` with no
+SDP → `488`, garbage datagrams ignored.
 
 ### P3 — uplink + local dev SRC `apps/siprec/__main__.py`
 
