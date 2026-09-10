@@ -70,7 +70,7 @@ from packages.risk.judge import DEFAULT_TIMEOUT_S as _JUDGE_DEFAULT_TIMEOUT_S
 from packages.obs.metrics import MetricsSnapshot, prometheus_text
 from packages.pipeline.pipeline import Pipeline
 from packages.policy.pack import PolicyPack, load_pack
-from packages.policy.tenants import TenantRegistry, load_tenants, tenant_pattern
+from packages.policy.tenants import TenantRegistry, resolve_language, load_tenants, tenant_pattern
 from packages.risk.judge import Judge
 from packages.session.manager import SessionManager
 from packages.storage.objectstore import LocalFsObjectStore, ObjectStore
@@ -193,6 +193,7 @@ class _Live:
     seen_legs: set[str] = field(default_factory=set)  # every leg id ever attached
     api_key_id: str | None = None  # the key this session was admitted with, if any
     user_ref: str | None = None  # the employee the integration attributed this call to
+    language: str = "en"  # the lexicon and warning templates this call is using
     retain_audio: bool = False  # P7: tee PCM to disk for this session
     audio_buf: dict[str, bytearray] = field(default_factory=dict)  # leg -> raw PCM16
 
@@ -643,6 +644,7 @@ def create_app(
                     "user_ref": live.user_ref,
                     "started_at": live.started_at,
                     "legs": sorted(live.legs),
+                    "language": live.language,
                     "state": last.state if last else "CALM",
                     "score": round(last.score, 1) if last else 0.0,
                     "peak_state": rec.peak_state if rec else "CALM",
@@ -1137,6 +1139,7 @@ def create_app(
         # that tenant's own data
         user_ref = (ws.query_params.get("user") or ws.headers.get("x-ringfence-user") or "")[:200]
         user_label = (ws.query_params.get("user_label") or "")[:200]
+        requested_lang = (ws.query_params.get("lang") or "")[:16] or None
         # ingress kind — the SIPREC adapter sends mode=carrier (two labelled
         # legs); the browser SDK leaves it unset
         mode = {"carrier": Mode.CARRIER, "enterprise": Mode.ENTERPRISE}.get(
@@ -1170,6 +1173,10 @@ def create_app(
             # anything else (mixed, the speakerphone default) => attribute
             # each turn acoustically
             role = {"far": RoleHint.CALLER, "near": RoleHint.CALLEE}.get(leg, RoleHint.MIXED)
+            # The lexicon and warning templates follow this; it used to be
+            # hard-coded "en", which made every non-English lexicon dead code
+            # on the live path.
+            language = resolve_language(requested_lang, the_tenants.get(tenant))
             await pipe.start(
                 SessionDescriptor(
                     session_id=session,
@@ -1177,7 +1184,7 @@ def create_app(
                     mode=mode,
                     legs=(LegSpec(leg_id=leg, role_hint=role, sample_rate=_RATE),),
                     started_at=time.time(),
-                    language="en",
+                    language=language,
                 )
             )
             live = _Live(
@@ -1186,6 +1193,7 @@ def create_app(
                 started_at=time.time(),
                 api_key_id=key_id,
                 user_ref=user_ref or None,
+                language=language,
                 retain_audio=(the_store is not None and the_tenants.get(tenant).retain_audio),
             )
             sessions[session] = live

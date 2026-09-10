@@ -43,6 +43,7 @@ class Config:
     caller_aor: str | None = None
     tenant: str | None = None
     consent_token: str | None = None
+    language: str | None = None  # ?lang= on the uplink; tenant config decides if honoured
     rtp_port_range: tuple[int, int] | None = None
     metrics_port: int = 9105  # 0 disables the /metrics listener
 
@@ -61,6 +62,7 @@ class Config:
             caller_aor=e.get("RF_SIPREC_CALLER_AOR") or None,
             tenant=e.get("RF_SIPREC_TENANT") or None,
             consent_token=e.get("RF_SIPREC_CONSENT_TOKEN") or None,
+            language=e.get("RF_SIPREC_LANGUAGE") or None,
             rtp_port_range=_port_range(e.get("RF_SIPREC_RTP_PORTS", "")),
             metrics_port=int(metrics) if metrics.isdigit() else 9105,
         )
@@ -165,6 +167,8 @@ class SiprecUplink:
                 query["tenant"] = self._cfg.tenant
             if self._cfg.consent_token:
                 query["consent"] = self._cfg.consent_token
+            if self._cfg.language:
+                query["lang"] = self._cfg.language
             attrib = self._attrib.get(session_id)
             if attrib:
                 query["user"], query["user_label"] = attrib

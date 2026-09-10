@@ -7,6 +7,16 @@ from packages.policy.pack import KNOWN_SIGNAL_IDS
 LEXICON_DIR = Path(__file__).resolve().parent
 
 
+def available_languages() -> frozenset[str]:
+    """Languages we actually ship a lexicon for.
+
+    Derived from the directory rather than hard-coded, so a new lexicon is
+    usable the moment it lands and a resolver can never hand the pipeline a
+    language it will fail to load.
+    """
+    return frozenset(p.stem for p in LEXICON_DIR.glob("*.yaml"))
+
+
 def load_lexicons(language: str) -> dict[str, list[str]]:
     path = LEXICON_DIR / f"{language}.yaml"
     data = yaml.safe_load(path.read_text(encoding="utf-8"))

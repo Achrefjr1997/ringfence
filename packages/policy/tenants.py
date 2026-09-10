@@ -14,7 +14,34 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field
 
+from packages.risk.lexicons import available_languages
+
 _CONFIG = Path(__file__).resolve().parents[2] / "config" / "tenants.yaml"
+
+
+def resolve_language(requested: str | None, cfg: "TenantConfig") -> str:
+    """Pick the lexicon language for a session.
+
+    The gateway used to hard-code ``"en"`` here, which meant the French and
+    Derja lexicons -- and their warning templates -- were unreachable on the
+    live path however a tenant was configured.  Order:
+
+    1. an explicit request (``?lang=`` / SIPREC), but only if the tenant is
+       configured for it, so a caller cannot select a language the operator
+       did not enable;
+    2. the tenant's first configured language;
+    3. English.
+
+    A language we ship no lexicon for is never returned -- ``load_lexicons``
+    would raise on it mid-call.
+    """
+    have = available_languages()
+    allowed = [lang for lang in cfg.languages if lang in have]
+    if requested and requested in allowed:
+        return requested
+    if allowed:
+        return allowed[0]
+    return "en"
 
 
 class TenantConfig(BaseModel):
