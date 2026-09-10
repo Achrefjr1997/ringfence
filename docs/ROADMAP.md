@@ -5,17 +5,22 @@ docs: `DESIGN_PRODUCTION.md` (the architecture this implements),
 `EXTERNAL_BENCHMARK.md` (the accuracy numbers this is trying to move),
 `OVERSIGHT.md` and `SIPREC.md` (the two phase-plans that shipped before it).
 
-Ten items plus a mobile SDK, in four phases. Phase 1 is things that are
-**broken**, not missing. Phase 2 is detection accuracy. Phase 3 is what makes it
-sellable. Phase 4 is the mobile SDK.
+Four phases. Phase 1 is things that are **broken**, not missing. Phase 2 is
+detection accuracy — and it argues for **moving weight off vocabulary onto
+structural signal**, because a lexicon is a snapshot of phrasing and the
+adversary edits phrasing for free. Phase 3 is what makes it sellable. Phase 4 is
+the mobile SDK.
 
 ## Decisions this plan encodes
 
 1. **Detection accuracy leads.** Nothing else matters if the engine only works
    on the scripts it was tuned on.
-2. **Carrier + enterprise is the wedge.** SIPREC (PRs #54–#57) is the revenue
+2. **Structure over vocabulary.** The fix for `refund`/`reward` at 1.5% is not a
+   bigger lexicon — `d7acf11` tried that and moved one family. It is signals
+   that survive rewording: repetition counts, dialogue acts, numeric structure.
+3. **Carrier + enterprise is the wedge.** SIPREC (PRs #54–#57) is the revenue
    path; the console is the workflow around it.
-3. **The mobile SDK is back in scope**, with eyes open — see §4.0 for what that
+4. **The mobile SDK is back in scope**, with eyes open — see §4.0 for what that
    costs and what it can never do.
 
 ## Already shipped
@@ -109,13 +114,67 @@ The numbers to beat, measured on `main` over 1,600 external dialogues:
 **recall 0.2725, FPR 0.000, benign margin −13.09.** Almost all the recall is one
 family — `ssn` at 99% — while `refund` and `reward` sit at **1.5%**.
 
-### 2.1 Make `ESCALATION` real *(1 PR)*
+## The framing: the problem is vocabulary *dependence*, not vocabulary *size*
+
+`ssn` at 99% is not generalisation, it is two memorised phrases. `refund` and
+`reward` at 1.5% is the same fact seen from the other side. The 11 terms added
+in `d7acf11` moved exactly one family and left every other one where it was.
+
+We have 396 lexicon terms across three languages, against a paraphrase space
+that is *growing* — scam syndicates now generate scripts with agentic AI, so the
+surface language gets more fluent and more varied every month. A lexicon is a
+snapshot of phrasing; the adversary edits phrasing for free.
+
+Two non-answers, both already tested:
+
+- **A bigger lexicon.** That is what `d7acf11` was, and it bought one family.
+- **Lexical retrieval (BM25).** `packages/risk/kb.py` tolerates word order and
+  inflection, not synonymy — *"you've been selected for a cash prize"* and
+  *"congratulations, you're our winner"* share almost no terms. It is useful for
+  assembling judge context and it is **not** a paraphrase defence.
+
+**What generalises is signal that is not vocabulary.** We already have proof
+this works: `NumericExtractor` detects OTP / PAN / Luhn / IBAN / spelled-digit
+runs. A six-digit code read aloud is **paraphrase-proof and language-independent**
+— no rewording changes the fact that a card number was spoken. That is the model
+for this whole phase.
+
+| Layer | Owns | Survives paraphrase? |
+|---|---|---|
+| **Structural** — numeric, dialogue acts, escalation, turn dynamics | the *act* | **Yes.** The load-bearing tier. |
+| **Lexical** | high-precision anchors only | No. Accept it; keep it small. |
+| **LLM (bounded ±30)** | the residual — novel shape, novel pretext | Yes, but slow, costly, and currently unmeasured (§2.0) |
+
+The strategic move is **shifting weight off vocabulary onto structure**, not
+growing the vocabulary and not replacing it with a model.
+
+### 2.0 Make the judge observable *(1 PR, small — do it first)*
+
+We cannot give Tier 2 responsibility for anything while we cannot see whether it
+answers. Today `_TIMEOUT_S = 0.8` (`packages/risk/judge.py:31`), a timeout
+returns `verdict="unclear", adjustment=0` **silently** (`judge.py:86`), and
+**no metric anywhere counts misses or latency**. `docker-compose.prod.yml`
+already carries the discovery in a comment — *"Ollama Cloud p99 ~2s; 0.8s
+default times out"* — and prod runs 2.5 s, which is itself above the p95 ≤ 2.0 s
+warn-latency SLO. The live integration test uses `timeout_s=20.0`, 25× the
+production budget.
+
+**Change.** `rf_judge_calls_total`, `rf_judge_timeouts_total`,
+`rf_judge_latency_seconds` in `packages/obs/metrics.py`, plus an alert when the
+miss rate crosses a threshold. Then set the timeout from data instead of a guess.
+
+### 2.1 Make `ESCALATION` real *(1 PR — the highest-leverage item in this plan)*
 
 `ESCALATION` (+10) is in `KNOWN_SIGNAL_IDS` and weighted in the pack, and
 **emitted by nothing**. `scoring.py`'s docstring says why it should exist:
 *"Repetition is ESCALATION's job, not summation's."* Today `EvidenceWindow.add`
 dedups on `(signal_id, role)`, so a scammer repeating an ask ten times scores
 exactly the same as once.
+
+**Why it leads this phase:** it is the first signal that gets *stronger* under
+paraphrase rather than weaker. If the scammer asks five times in five different
+phrasings, the count of asks is the signal — rewording **increases** it. That is
+the exact opposite of a lexicon's failure mode.
 
 **Change.** `EvidenceWindow` keeps `hits` untouched — so decay semantics and
 every combo call site are unaffected — and gains an occurrence log:
@@ -150,32 +209,60 @@ call has zero repeats and would not fire — but that is one sample.
 800 benign items**, starting at 2 and 4. This is exactly the loop the Phase-0
 gate exists to make cheap.
 
-**Success:** recall ≥ 0.40 driven by `support` / `refund` / `reward` rather than
-more `ssn`, benign margin no worse, FPR 0.000, ten invariants green.
+### 2.2 `DialogueActExtractor` — the main new build *(2–3 PRs)*
 
-### 2.2 Pretext signals *(1 PR)*
+`DESIGN_PRODUCTION` §6.2 lists it as [P2] and it does not exist. The pipeline
+runs exactly two extractors (`packages/pipeline/pipeline.py:181`).
 
-`refund` and `reward` are at 1.5% because their giveaway phrases —
-`sweepstakes`, `you've been selected`, `processing fee`, `verification fee`,
-`account has been suspended` — were **mined and then rejected**, because
-`docs/LEXICON_MINING.md` records they *"describe scam pretexts that RingFence
-has no signal for."* The terms exist; the signal to hang them on does not.
+**The idea.** *"Read me the code"*, *"Tell me those numbers"*, *"What does the
+text say"*, *"Give me that six-digit code"* are **one act** with unbounded
+surface forms. Classify the act, not the words.
 
-**Change.** Add `PRETEXT_WINDFALL`, `PRETEXT_REFUND`, `PRETEXT_ACCOUNT_ISSUE`
-to `KNOWN_SIGNAL_IDS` at a **low weight (+8 to +12)** — they are context, not
-coercion, and must not carry a lone call to ALERT. Seed them from the parked
-terms. Update `config/policy/default.yaml` and add warning copy to
-`packages/intervene/templates.yaml` in en and fr.
+**Why it survives paraphrase.** An act is `(act type) × (target)`, and both
+parts are stable where vocabulary is not:
 
-Then extend a combo: pretext ∧ (`VERIF_INVERT` ∨ `RAIL_UNUSUAL`) is the actual
-prize-scam shape — the pretext sets up the ask, and it is the *pair* that should
-score, not either alone. This is corroboration doing the work rather than one
-heavy term.
+- **Act type** comes from *function words and syntax* — a closed, slow-changing
+  class. Sentence-initial bare verb → imperative. Wh-word or auxiliary inversion
+  → interrogative. Negation plus a first-person modal (*"I won't…"*, *"I'm not
+  going to…"*) → refusal. Content words, which are what an adversary edits, do
+  not participate.
+- **Target** comes from the structural extractors we already have —
+  `NumericExtractor` for codes / PAN / IBAN, plus a small closed entity list for
+  accounts, transfers and remote-access software.
 
-**Success:** `refund` and `reward` reach ≥ 20% ALERT+, benign items scoring
-above zero no higher than today's 164, and no benign peak above 55.
+The pair is the signal: **an imperative or interrogative directed at the callee
+whose target is a secret or a money rail.** That composition is what "read me
+the code" and "just tell me what the message says" have in common, and it is
+what no rewording removes.
 
-### 2.3 Turn-offset awareness *(1 PR, contract change)*
+**New signals:** `ACT_DEMAND_SECRET`, `ACT_DEMAND_RAIL`, `ACT_REFUSAL`
+(protective, negative weight).
+
+**No new dependencies.** This is pattern matching over function words composed
+with the extractors we already run — not a parser, not a model.
+
+**The acceptance test is the whole point:** build a paraphrase set — the same
+scam acts rewritten with disjoint content vocabulary — and require that
+`DialogueActExtractor` holds recall where `LexicalExtractor` collapses. If it
+does not beat the lexicon on paraphrased text, it has not earned its place.
+
+### 2.3 Pretext signals — small, and honestly limited *(1 PR)*
+
+Demoted from where this plan first put it. Pretext phrases (`sweepstakes`,
+`processing fee`, `you've been selected`, `account has been suspended`) were
+mined and rejected because `docs/LEXICON_MINING.md` records they *"describe scam
+pretexts that RingFence has no signal for."* Adding the signal is worth doing —
+but it is still vocabulary, so it will help the `refund` and `reward` families
+on the phrasings we anticipated and not much beyond them.
+
+**Change.** `PRETEXT_WINDFALL`, `PRETEXT_REFUND`, `PRETEXT_ACCOUNT_ISSUE` at a
+**low weight (+8 to +12)** — context, not coercion, never enough to carry a lone
+call to ALERT. Then a combo: pretext ∧ (`ACT_DEMAND_SECRET` ∨
+`ACT_DEMAND_RAIL`). The pretext sets up the ask; it is the **pair** that scores.
+Note the combo pairs with a *structural* signal from 2.2, not a lexical one —
+that pairing is what keeps it working when the pretext itself is reworded.
+
+### 2.4 Turn-offset awareness *(1 PR, contract change)*
 
 Research (arXiv 2606.16052) finds phase and turn-offset modelling beats both
 keywords and few-shot LLMs — 84.4% vs 70.9% tactic accuracy — and that **one
@@ -187,8 +274,21 @@ is purely time-based.
 `score_window` weight by turns-since-first-evidence alongside age decay.
 
 Do this **last and alone** — it touches a frozen contract and every
-construction site, and if it rides along with 2.1 or 2.2 a regression cannot be
-attributed to either.
+construction site, and if it rides along with 2.1–2.3 a regression cannot be
+attributed to any of them.
+
+## Phase 2 success criteria
+
+Measured on the external corpus, against the Phase-0 gate:
+
+- **Recall ≥ 0.45**, and — the part that matters — driven by `support`,
+  `refund` and `reward` rather than by more `ssn`.
+- **Benign margin no worse than −13.09**, benign items scoring above zero no
+  higher than today's 164, and no benign peak above 55.
+- **FPR 0.000** at both ALERT and INTERVENE; ten invariants green.
+- **Paraphrase holds:** on the rewritten-vocabulary set from 2.2, structural
+  signals retain recall where lexical recall collapses. This is the number that
+  says whether we solved the problem or just moved the snapshot.
 
 ---
 
