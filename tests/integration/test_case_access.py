@@ -40,14 +40,17 @@ def _hdr(token: str) -> dict[str, str]:
 
 def _setup() -> tuple[TestClient, dict[str, str]]:
     c = _client()
-    _, org_a = _signup(c, "admin@a.co", "OrgA")
+    admin_a, org_a = _signup(c, "admin@a.co", "OrgA")
     admin_b, _ = _signup(c, "admin@b.co", "OrgB")
     tokens = {
         "op_a": _member(c, org_a, "op@a.co", "operator"),
         "guard_a": _member(c, org_a, "guard@a.co", "guardian"),
         "admin_b": admin_b,
     }
-    r = c.post(f"/replay/fx_tech_support_en_001?session=caseA&tenant={org_a}&speed=400")
+    # /replay takes its tenant from the API key, never from ?tenant= --
+    # outside dev_mode it is a real, org-scoped write endpoint.
+    key = c.post("/orgs/keys", json={"name": "replay"}, headers=_hdr(admin_a)).json()["key"]
+    r = c.post(f"/replay/fx_tech_support_en_001?session=caseA&speed=400&key={key}")
     assert r.status_code == 200
     return c, tokens
 

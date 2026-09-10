@@ -531,12 +531,23 @@ def create_app(
         return PlainTextResponse(body, media_type="text/plain; version=0.0.4")
 
     async def replay_fixture(request: Request) -> JSONResponse:
-        """Dev helper for the console demo: play a fixture's transcript onto
-        the shared bus so a browser watching ``session`` sees it live.  Runs
-        to completion before responding — use a high ``speed``."""
+        """Play a fixture's transcript onto the shared bus so a browser
+        watching ``session`` sees it live.  Runs to completion before
+        responding — use a high ``speed``.
+
+        **The tenant comes from the API key, never from the query string.**
+        This publishes to ``rf.<tenant>.*`` and writes cases, so an
+        unauthenticated caller who could choose ``?tenant=`` could inject
+        fabricated decisions into any customer's bus, case store and
+        guardian webhook.  In ``dev_mode`` ``?tenant=`` still selects, as it
+        does for every other read endpoint.
+        """
+        tenant_id, reason = read_tenant(request)
+        if reason is not None:
+            return JSONResponse({"error": reason.lower()}, status_code=401)
         fixture_id = request.path_params["fixture_id"]
         session_id = request.query_params.get("session", f"replay-{fixture_id}")
-        tenant_id = request.query_params.get("tenant", "replay")
+        tenant_id = tenant_id or "replay"
         speed = float(request.query_params.get("speed", "8"))
         from packages.ingress.replay import replay as _replay
 
