@@ -7,7 +7,7 @@ No sockets live here — that is P2 (``srs.py``).
 
 from __future__ import annotations
 
-from packages.ingress.siprec.g711 import alaw_decode, decode, ulaw_decode
+from packages.ingress.siprec.g711 import alaw_decode, decode, ulaw_decode, ulaw_encode
 from packages.ingress.siprec.metadata import (
     Participant,
     RecordingMetadata,
@@ -44,4 +44,5 @@ __all__ = [
     "parse_recording_metadata",
     "split_multipart",
     "ulaw_decode",
+    "ulaw_encode",
 ]
