@@ -353,32 +353,45 @@ async function callsView() {
   load();
 }
 
-function scoreChart(scores) {
+function scoreChart(scores, maxT = 0) {
   const W = 680, H = 190, PAD = 28;
-  const c = el("canvas", { width: W, height: H, style: "width:100%;max-width:680px;height:auto;margin-top:8px" });
+  const c = el("canvas", { width: W, height: H, style: "width:100%;max-width:680px;height:auto;margin-top:8px;cursor:crosshair" });
   const g = c.getContext("2d");
   const css = (v) => getComputedStyle(document.body).getPropertyValue(v).trim() || "#888";
-  const tMax = Math.max(1, ...scores.map((p) => p.t));
-  const x = (t) => PAD + (W - PAD * 2) * (t / tMax);
+  const tMax = Math.max(1, maxT, ...scores.map((p) => p.t));
+  const x = (t) => PAD + (W - PAD * 2) * (Math.max(0, Math.min(tMax, t)) / tMax);
   const y = (s) => H - PAD - (H - PAD * 2) * (Math.max(0, Math.min(100, s)) / 100);
-  // escalation bands
-  for (const [lo, hi, col] of [[0, 25, "--calm"], [25, 55, "--watch"], [55, 80, "--alert"], [80, 100, "--intervene"]]) {
-    g.fillStyle = css(col) + "18";
-    g.fillRect(PAD, y(hi), W - PAD * 2, y(lo) - y(hi));
-  }
-  g.strokeStyle = "#ffffff14"; g.beginPath(); g.moveTo(PAD, y(0)); g.lineTo(W - PAD, y(0)); g.stroke();
-  if (scores.length) {
-    g.strokeStyle = css("--accent"); g.lineWidth = 2; g.beginPath();
-    scores.forEach((p, i) => { const fn = i ? "lineTo" : "moveTo"; g[fn](x(p.t), y(p.score)); });
-    g.stroke();
-    for (const p of scores) {
-      g.fillStyle = css(ST_COLOR[p.state] || "--accent");
-      g.beginPath(); g.arc(x(p.t), y(p.score), 3, 0, 7); g.fill();
+
+  function draw(playT) {
+    g.clearRect(0, 0, W, H);
+    for (const [lo, hi, col] of [[0, 25, "--calm"], [25, 55, "--watch"], [55, 80, "--alert"], [80, 100, "--intervene"]]) {
+      g.fillStyle = css(col) + "18";
+      g.fillRect(PAD, y(hi), W - PAD * 2, y(lo) - y(hi));
     }
+    g.strokeStyle = "#ffffff14"; g.beginPath(); g.moveTo(PAD, y(0)); g.lineTo(W - PAD, y(0)); g.stroke();
+    if (scores.length) {
+      g.strokeStyle = css("--accent"); g.lineWidth = 2; g.beginPath();
+      scores.forEach((p, i) => { const fn = i ? "lineTo" : "moveTo"; g[fn](x(p.t), y(p.score)); });
+      g.stroke();
+      for (const p of scores) {
+        g.fillStyle = css(ST_COLOR[p.state] || "--accent");
+        g.beginPath(); g.arc(x(p.t), y(p.score), 3, 0, 7); g.fill();
+      }
+    }
+    if (playT != null && playT >= 0) {
+      g.strokeStyle = css("--accent"); g.globalAlpha = 0.9; g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(x(playT), PAD - 6); g.lineTo(x(playT), H - PAD); g.stroke();
+      g.globalAlpha = 1;
+      g.fillStyle = css("--accent"); g.font = "10px ui-monospace,monospace";
+      g.fillText(fmtDur(playT), Math.min(x(playT) + 4, W - 46), PAD - 8);
+    }
+    g.fillStyle = "#8A8F98"; g.font = "10px ui-monospace,monospace";
+    g.fillText("100", 2, y(100) + 4); g.fillText("0", 2, y(0) + 4);
+    g.fillText(Math.round(tMax) + "s", W - PAD - 10, H - 8);
   }
-  g.fillStyle = "#8A8F98"; g.font = "10px ui-monospace,monospace";
-  g.fillText("100", 2, y(100) + 4); g.fillText("0", 2, y(0) + 4);
-  g.fillText(Math.round(tMax) + "s", W - PAD - 10, H - 8);
+  draw(null);
+  c.seek = (t) => draw(t);
+  c._t = (px) => ((px / c.clientWidth) * W - PAD) / (W - PAD * 2) * tMax;  // pixel -> seconds
   return c;
 }
 
@@ -389,19 +402,34 @@ async function callDetailView(sid) {
   try {
     const c = await api(`/calls/${encodeURIComponent(sid)}`);
     box.innerHTML = `<div class="row" style="gap:12px;flex-wrap:wrap"><span class="pill st-${c.peak_state}">${c.peak_state}</span><span class="mono">peak ${c.peak_score}</span>${c.user_ref ? `<span class="mono" style="color:var(--t2)">${esc(c.user_label || c.user_ref)}</span>` : ""}${c.private ? `<span class="pill st-INTERVENE">🔒 private</span>` : ""}<span class="sub" style="margin:0">${c.live ? "live now" : fmtDur(c.duration_s)} · ${(c.scores || []).length} decisions</span>${c.has_case ? `<a href="#/cases/${encodeURIComponent(sid)}" style="font-size:12px">open case →</a>` : ""}</div>`;
-    box.append(scoreChart(c.scores || []));
+    const turns = c.transcript || [];
+    const maxT = Math.max(c.duration_s || 0, ...turns.map((t) => t[2] || 0));
+    const chart = scoreChart(c.scores || [], maxT);
+    box.append(chart);
+
+    let au = null;
+    const seek = (t) => { chart.seek(t); if (au) { try { au.currentTime = t; } catch {} } };
+    chart.onclick = (ev) => { const r = chart.getBoundingClientRect(); seek(chart._t(ev.clientX - r.left)); };
+
     if (c.audio) {
       const src = `/calls/${encodeURIComponent(sid)}/audio?token=${encodeURIComponent(store.token || "")}`;
-      const au = el("audio", { controls: true, src, style: "width:100%;max-width:680px;margin-top:12px;display:block" });
+      au = el("audio", { controls: true, src, style: "width:100%;max-width:680px;margin-top:12px;display:block" });
+      au.addEventListener("timeupdate", () => chart.seek(au.currentTime));
       box.append(au, el("a", { href: src + "&download=1", textContent: "download recording", style: "font-size:12px" }));
     }
     if (c.can_manage) box.append(accessPanel(sid, c));
+
     const tx = el("div", { style: "font-family:var(--mono);font-size:12px;margin-top:16px;line-height:1.7" });
-    for (const [role, text, t] of c.transcript || []) tx.innerHTML += `<div><span style="color:var(--t2)">${role} t${t}</span> <span style="color:${role === "CALLER" ? "var(--caller)" : role === "CALLEE" ? "var(--callee)" : "var(--t2)"}">${esc(text)}</span></div>`;
-    if (!(c.transcript || []).length) tx.innerHTML = `<span class="sub">transcript not retained (needs RF_RETAIN_TRANSCRIPTS, and only ALERT+ calls open a case)</span>`;
+    for (const [role, text, t] of turns) {
+      const d = el("div", { style: "cursor:pointer" });
+      d.innerHTML = `<span style="color:var(--t2)">${role} ${fmtDur(t)}</span> <span style="color:${role === "CALLER" ? "var(--caller)" : role === "CALLEE" ? "var(--callee)" : "var(--t2)"}">${esc(text)}</span>`;
+      d.onclick = () => seek(t || 0);
+      tx.append(d);
+    }
+    if (!turns.length) tx.innerHTML = `<span class="sub">transcript not retained (needs RF_RETAIN_TRANSCRIPTS, and only ALERT+ calls open a case)</span>`;
     box.append(tx);
     box.append(el("a", { href: "#/calls", textContent: "← all calls", style: "display:inline-block;margin-top:16px;font-size:13px" }));
-    m.append(commentsPanel(sid));
+    m.append(commentsPanel(sid, seek));
     if (store.role === "admin") m.append(accessLogPanel(sid));
   } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
@@ -439,7 +467,7 @@ function accessPanel(sid, c) {
 // ---------- threaded review comments ----------
 function fmtWhen(ts) { return ts ? new Date(ts * 1000).toLocaleString() : ""; }
 
-function commentsPanel(sid) {
+function commentsPanel(sid, seek) {
   const panel = el("div", { className: "card" }); panel.style.marginTop = "16px";
   panel.innerHTML = `<div class="lbl" style="margin-bottom:10px">Review thread</div><div id="cthread">loading…</div>`;
   const thread = panel.querySelector("#cthread");
@@ -450,15 +478,34 @@ function commentsPanel(sid) {
     <div class="row" style="gap:8px;margin-top:8px;flex-wrap:wrap">
       <input class="field" id="ct" style="max-width:90px" placeholder="@ sec">
       <select class="field" id="cvis" style="max-width:150px"><option value="org">everyone</option><option value="mentions">mentions only</option><option value="private">private</option></select>
-      <input class="field" id="cmnt" style="max-width:220px" placeholder="mention emails, comma">
+      <input class="field" id="cmnt" style="max-width:220px" placeholder="mention emails, comma" list="rf-people">
+      <datalist id="rf-people"></datalist>
       <button class="btn" id="cadd">Comment</button>
     </div>
+    <div id="cchips" class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px"></div>
     <div class="err" id="cerr" style="margin-top:6px"></div>`;
   panel.append(form);
 
+  // @mention autocomplete: populate from the org roster (admins can list it)
+  api("/orgs/users").then((users) => {
+    const dl = form.querySelector("#rf-people");
+    const chips = form.querySelector("#cchips");
+    for (const u of users) dl.append(el("option", { value: u.email }));
+    for (const u of users.slice(0, 8)) {
+      const b = el("button", { className: "btn ghost", textContent: "@" + u.email.split("@")[0], style: "font-size:11px;padding:3px 8px" });
+      b.onclick = () => {
+        const f = form.querySelector("#cmnt");
+        const has = f.value.split(",").map((s) => s.trim()).filter(Boolean);
+        if (!has.includes(u.email)) f.value = [...has, u.email].join(", ");
+      };
+      chips.append(b);
+    }
+  }).catch(() => { /* operators can't list users — freeform entry still works */ });
+
   function node(c, replyTo) {
     const d = el("div", { style: `margin:10px 0;${replyTo ? "margin-left:22px;" : ""}` });
-    const tchip = c.t_seconds != null ? `<span class="pill st-WATCH" style="cursor:default">@${Math.round(c.t_seconds)}s</span>` : "";
+    const clickable = c.t_seconds != null && typeof seek === "function";
+    const tchip = c.t_seconds != null ? `<span class="pill st-WATCH" data-seek="${c.t_seconds}" style="cursor:${clickable ? "pointer" : "default"}">@${fmtDur(c.t_seconds)}</span>` : "";
     const done = c.resolved_at ? `<span class="ok" style="font-size:11px">resolved</span>` : "";
     d.innerHTML = `<div class="row" style="gap:8px;flex-wrap:wrap"><span class="mono" style="font-size:12px">${esc(c.author_email)}</span><span class="sub" style="margin:0">${fmtWhen(c.created_at)}${c.edited_at ? " · edited" : ""}</span>${tchip}${done}<span class="sub" style="margin:0">${c.visibility === "org" ? "" : c.visibility}</span></div>
       <div style="font-size:13px;margin:4px 0;white-space:pre-wrap">${esc(c.body)}</div>
@@ -467,6 +514,7 @@ function commentsPanel(sid) {
     d.querySelector('[data-a="resolve"]').onclick = async (e) => { e.preventDefault(); await api(`/calls/${encodeURIComponent(sid)}/comments/${c.id}/resolve`, { method: "POST", body: { resolved: !c.resolved_at } }); load(); };
     d.querySelector('[data-a="edit"]').onclick = async (e) => { e.preventDefault(); const v = prompt("edit comment", c.body); if (v != null) { await api(`/calls/${encodeURIComponent(sid)}/comments/${c.id}`, { method: "PATCH", body: { body: v } }); load(); } };
     d.querySelector('[data-a="del"]').onclick = async (e) => { e.preventDefault(); if (confirm("delete this comment?")) { await api(`/calls/${encodeURIComponent(sid)}/comments/${c.id}`, { method: "DELETE" }); load(); } };
+    if (clickable) d.querySelector("[data-seek]").onclick = () => seek(Number(c.t_seconds));
     return d;
   }
 
