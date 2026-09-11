@@ -23,7 +23,25 @@ the mobile SDK.
 4. **The mobile SDK is back in scope**, with eyes open — see §4.0 for what that
    costs and what it can never do.
 
-## Already shipped
+## Already shipped (2026-09-10/11)
+
+| item | PR |
+|---|---|
+| Stage 0 — the 3-number gate | #58, #59 |
+| 1.1 language resolution (French now runs) | #66 |
+| 1.2 `/replay` cross-tenant injection closed | #62 |
+| 2.0 judge observability + 4 s budget synchronised | #64 |
+| 2.1 `ESCALATION` | #61 |
+| 2.2 `DialogueActExtractor` | #63 |
+| 1.3/1.4 ASR wall-clock cap + VAD idle close | this PR |
+| judge measured for the first time | #65 |
+
+**External-corpus recall 0.2725 → 0.3638**, with FPR, benign margin and
+benign-above-line all unmoved — every point came from `refund`/`reward`/
+`support` while `ssn` stayed at 99%.
+
+Remaining in Phase 1–2: **2.3 pretext signals**, **2.4 turn-offset**. All of
+Phase 3 and Phase 4 is untouched.
 
 - **Stage 0 — the gate** (PR #59). `packages/eval/gate.py` now gates three
   numbers instead of one: recall, FPR, **and benign peak-score margin**. FPR
@@ -98,13 +116,19 @@ unbounded cost leak with no metric on it.
 **Problem.** `packages/media/vad.py` is fully built and tested and imported by
 nothing. It is the hook for two separate things we need.
 
-**Change.** Gate the ASR uplink on voiced frames in the capture path, so we stop
-paying to transcribe silence (batch is 40–50% cheaper than streaming, and
-silence is 100% waste). Then use the same signal for the §4.4 shed ladder's
-bottom rung — drop unvoiced frames above 98% queue pressure.
+**Change.** ~~Gate the ASR uplink on voiced frames so we stop paying to
+transcribe silence.~~ **Corrected while implementing:** AssemblyAI bills
+*wall-clock socket time, idle included*, so gating the upload saves nothing
+there — that reasoning only holds for per-audio-second providers. What VAD is
+actually worth here:
 
-**Verify.** A fixture with long silences produces materially fewer ASR bytes
-with identical decisions. The shed ladder gets its first real rung.
+- **the idle signal.** A leg that hangs up badly often keeps streaming
+  *silence*, so a byte-counter never fires. "No speech for `RF_SESSION_IDLE_S`"
+  does, and that is what closes the socket and stops the billing.
+- the §4.4 shed ladder's bottom rung — drop unvoiced frames above 98% pressure.
+
+The bill is bounded independently by a wall-clock cap inside the ASR stream
+itself (`_MAX_SESSION_S`), so a session the gateway forgets about still ends.
 
 ---
 

@@ -21,6 +21,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
+import time
 from collections import deque
 from collections.abc import AsyncIterator
 from typing import Any
@@ -31,11 +33,18 @@ from websockets.exceptions import ConnectionClosed
 from packages.asr.provider import ASRCapabilities, StreamSpec
 from packages.contracts.transcript import Turn, Word
 
+log = logging.getLogger("ringfence.asr")
+
 _DEFAULT_WS = "wss://streaming.assemblyai.com/v3/ws"
 _SEND_QUEUE_MAX = 200
 _SESSION_MAX_S = 3 * 60 * 60
 _RECONNECT_AT_S = 2 * 60 * 60 + 45 * 60
 _STITCH_CONTEXT_S = 30.0
+# v3 bills the wall-clock time the socket is open, idle included -- an
+# unclosed session can bill for hours.  We open one per leg per call, and
+# under SIPREC the hangup belongs to an SBC we do not control, so a stuck leg
+# is an unbounded, silent cost leak.  This is the backstop.
+_MAX_SESSION_S = 2 * 60 * 60
 
 # v3 streaming rejects audio chunks outside 50–1000 ms; the browser worklet
 # emits 40 ms frames, so we coalesce to ~100 ms before sending.
@@ -94,12 +103,16 @@ class AssemblyAIStream:
         send_queue_max: int = _SEND_QUEUE_MAX,
         reconnect_at_s: float = _RECONNECT_AT_S,
         stitch_context_s: float = _STITCH_CONTEXT_S,
+        max_session_s: float = _MAX_SESSION_S,
     ) -> None:
         self._api_key = api_key
         self._spec = spec
         self._base_url = base_url
         self._reconnect_at_s = reconnect_at_s
         self._stitch_context_s = stitch_context_s
+        self._max_session_s = max_session_s
+        self._opened_at: float | None = None
+        self.capped = False  # closed by the wall-clock backstop, not by the caller
 
         self._out: asyncio.Queue[bytes] = asyncio.Queue(maxsize=send_queue_max)
         self._turns: asyncio.Queue[Turn | None] = asyncio.Queue()
@@ -141,7 +154,13 @@ class AssemblyAIStream:
         if self._fatal is not None and not self._connected.is_set():
             raise RuntimeError(f"AssemblyAI refused the stream: {self._fatal}")
 
+    def _budget_left(self) -> float:
+        if self._opened_at is None:
+            return self._max_session_s
+        return self._max_session_s - (time.monotonic() - self._opened_at)
+
     async def _run(self) -> None:
+        self._opened_at = time.monotonic()
         try:
             while not self._closed.is_set():
                 async with connect(
@@ -152,7 +171,10 @@ class AssemblyAIStream:
                     await self._resend_context()
                     sender = asyncio.create_task(self._send_loop(ws))
                     receiver = asyncio.create_task(self._recv_loop(ws))
-                    timer = asyncio.create_task(asyncio.sleep(self._reconnect_at_s))
+                    # whichever comes first: the stitch reconnect, or the
+                    # wall-clock backstop that ends the billing outright
+                    budget = self._budget_left()
+                    timer = asyncio.create_task(asyncio.sleep(min(self._reconnect_at_s, budget)))
                     try:
                         await asyncio.wait(
                             {sender, receiver, timer, asyncio.create_task(self._closed.wait())},
@@ -163,6 +185,13 @@ class AssemblyAIStream:
                             task.cancel()
                         with contextlib.suppress(Exception):
                             await asyncio.gather(sender, receiver, timer, return_exceptions=True)
+                    if self._budget_left() <= 0:
+                        self.capped = True
+                        log.warning(
+                            "ASR session hit the %.0fs wall-clock cap; closing to stop billing",
+                            self._max_session_s,
+                        )
+                        break
                     if self._fatal is not None:
                         break  # auth / quota / protocol error — do not reconnect
                     if (
