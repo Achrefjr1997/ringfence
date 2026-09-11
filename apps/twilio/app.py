@@ -30,7 +30,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from apps.twilio.twiml import reject, stream_and_dial, verify_signature
+from apps.twilio.twiml import reject, stream_and_dial, stream_and_hold, verify_signature
 from packages.ingress.capture_uplink import CaptureUplink, UplinkConfig, read_gateway_key
 from packages.ingress.mediastream import MediaFormatError, leg_for_track
 from packages.ingress.mediastream.twilio import parse
@@ -38,12 +38,20 @@ from packages.ingress.mediastream.session import StreamSession
 
 log = logging.getLogger("ringfence.twilio")
 
+# RingFence language codes are bare ("fr"); <Say> wants a locale.
+_SAY_LOCALES = {"fr": "fr-FR", "en": "en-US"}
+
+
+def _say_language(language: str | None) -> str | None:
+    return _SAY_LOCALES.get(language or "", None)
+
 
 @dataclass(frozen=True, slots=True)
 class Config:
     auth_token: str = ""  # Twilio account auth token -- signs the webhook
     public_url: str = ""  # https://<tunnel-or-host>, how Twilio reaches us
-    dial_to: str = ""  # the protected person's real phone, E.164
+    dial_to: str = ""  # the protected person's real phone, E.164; empty => hold mode
+    hold_notice: str = ""  # spoken before holding, when there is no second leg
     gateway_ws: str = "ws://localhost:8000/ws/capture"
     api_key: str = ""  # RingFence key, authenticates us outbound -- not a Twilio one
     tenant: str | None = None
@@ -57,6 +65,7 @@ class Config:
             auth_token=e.get("RF_TWILIO_AUTH_TOKEN", ""),
             public_url=e.get("RF_TWILIO_PUBLIC_URL", "").rstrip("/"),
             dial_to=e.get("RF_TWILIO_DIAL_TO", ""),
+            hold_notice=e.get("RF_TWILIO_HOLD_NOTICE", ""),
             gateway_ws=e.get("RF_GATEWAY_WS", "ws://localhost:8000/ws/capture"),
             api_key=read_gateway_key(e, "RF_TWILIO_GATEWAY_KEY"),
             tenant=e.get("RF_TWILIO_TENANT") or None,
@@ -104,6 +113,18 @@ def create_app(config: Config | None = None, *, uplink: CaptureUplink | None = N
         to = params.get("To", "")
         frm = params.get("From", "")
         log.info("inbound call %s -> %s", frm, to)
+        if not cfg.dial_to:
+            # No second leg to bridge -- a trial account cannot place one.
+            # Capture still works; every turn just arrives as CALLER.
+            log.warning("no RF_TWILIO_DIAL_TO: holding the line, single-leg capture only")
+            return Response(
+                stream_and_hold(
+                    stream_url=cfg.stream_url,
+                    notice=cfg.hold_notice or None,
+                    language=_say_language(cfg.language),
+                ),
+                media_type="text/xml",
+            )
         return Response(
             stream_and_dial(stream_url=cfg.stream_url, dial_to=cfg.dial_to),
             media_type="text/xml",

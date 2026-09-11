@@ -32,18 +32,26 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from apps.telnyx.webhook import SignatureUnavailableError, verify_signature
 from packages.ingress.capture_uplink import CaptureUplink, UplinkConfig, read_gateway_key
 from packages.ingress.mediastream import MediaFormatError, leg_for_track
-from packages.ingress.mediastream.markup import reject, stream_and_dial
+from packages.ingress.mediastream.markup import reject, stream_and_dial, stream_and_hold
 from packages.ingress.mediastream.session import StreamSession
 from packages.ingress.mediastream.telnyx import parse
 
 log = logging.getLogger("ringfence.telnyx")
+
+# RingFence language codes are bare ("fr"); <Say> wants a locale.
+_SAY_LOCALES = {"fr": "fr-FR", "en": "en-US"}
+
+
+def _say_language(language: str | None) -> str | None:
+    return _SAY_LOCALES.get(language or "", None)
 
 
 @dataclass(frozen=True, slots=True)
 class Config:
     public_key: str = ""  # Telnyx account Ed25519 public key (base64), verifies inbound
     public_url: str = ""  # https://<tunnel-or-host> Telnyx reaches us on
-    dial_to: str = ""  # the protected person's phone, E.164
+    dial_to: str = ""  # the protected person's phone, E.164; empty => hold mode
+    hold_notice: str = ""  # spoken before holding, when there is no second leg
     gateway_ws: str = "ws://localhost:8000/ws/capture"
     api_key: str = ""  # RingFence key, authenticates us outbound -- not a Telnyx one
     tenant: str | None = None
@@ -57,6 +65,7 @@ class Config:
             public_key=e.get("RF_TELNYX_PUBLIC_KEY", ""),
             public_url=e.get("RF_TELNYX_PUBLIC_URL", "").rstrip("/"),
             dial_to=e.get("RF_TELNYX_DIAL_TO", ""),
+            hold_notice=e.get("RF_TELNYX_HOLD_NOTICE", ""),
             gateway_ws=e.get("RF_GATEWAY_WS", "ws://localhost:8000/ws/capture"),
             api_key=read_gateway_key(e, "RF_TELNYX_GATEWAY_KEY"),
             tenant=e.get("RF_TELNYX_TENANT") or None,
@@ -106,6 +115,18 @@ def create_app(config: Config | None = None, *, uplink: CaptureUplink | None = N
 
         params = dict(parse_qsl(body.decode("utf-8", "replace"), keep_blank_values=True))
         log.info("inbound call %s -> %s", params.get("From", ""), params.get("To", ""))
+        if not cfg.dial_to:
+            # No second leg to bridge -- a trial account cannot place one.
+            # Capture still works; every turn just arrives as CALLER.
+            log.warning("no RF_TELNYX_DIAL_TO: holding the line, single-leg capture only")
+            return Response(
+                stream_and_hold(
+                    stream_url=cfg.stream_url,
+                    notice=cfg.hold_notice or None,
+                    language=_say_language(cfg.language),
+                ),
+                media_type="text/xml",
+            )
         return Response(
             stream_and_dial(stream_url=cfg.stream_url, dial_to=cfg.dial_to),
             media_type="text/xml",
