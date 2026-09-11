@@ -111,6 +111,7 @@ class Pipeline:
             self._sole_role = role_for_hint(sole_hint) if sole_hint is not None else None
 
         lang = desc.language or "en"
+        self._language = lang
         weights = {sid: spec.weight for sid, spec in self._pack.signals.items()}
         lexicons = load_lexicons(lang)
         for sid, spec in self._pack.signals.items():
@@ -268,6 +269,11 @@ class Pipeline:
                             "state": decision.state,
                             "score": decision.score,
                             "counterfactual": decision.counterfactual,
+                            # the resolved session language, not the raw
+                            # request -- InterventionDispatcher needs this to
+                            # pick the right warning copy and has no other
+                            # way to see it (it only sees the bus event).
+                            "language": self._language,
                             "contributions": [
                                 {
                                     "source": c.source,

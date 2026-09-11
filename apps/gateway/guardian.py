@@ -25,8 +25,8 @@ from typing import Any
 
 import httpx
 
+from apps.gateway.decision_event import decision_from_event
 from packages.contracts.audio import Mode
-from packages.contracts.risk import Contribution, Decision
 from packages.policy.pack import PolicyPack
 from packages.policy.tenants import TenantRegistry
 from packages.intervene.webhook import GuardianWebhook
@@ -34,27 +34,6 @@ from packages.intervene.webhook import GuardianWebhook
 log = logging.getLogger("ringfence.guardian")
 
 _REPLAY_TENANT = "replay"
-
-
-def _decision_from_event(p: dict[str, Any]) -> Decision:
-    return Decision(
-        decision_id=str(p.get("decision_id", "")),
-        session_id=str(p.get("session_id", "")),
-        t=float(p.get("t", 0.0)),
-        state=p.get("state", "CALM"),
-        score=float(p.get("score", 0.0)),
-        policy_pack="",
-        contributions=tuple(
-            Contribution(
-                source=c["source"],
-                id=c["id"],
-                value=float(c.get("value", 0.0)),
-                role=c.get("role"),
-            )
-            for c in p.get("contributions", [])
-        ),
-        counterfactual=p.get("counterfactual"),
-    )
 
 
 class GuardianDispatcher:
@@ -108,7 +87,7 @@ class GuardianDispatcher:
             self._hooks[(cfg.guardian_webhook_url, secret)] = hook
 
         try:
-            return await hook.notify(_decision_from_event(payload), mode=Mode.SDK)
+            return await hook.notify(decision_from_event(payload), mode=Mode.SDK)
         except Exception:  # noqa: BLE001 - a guardian's endpoint must never break the gateway
             log.exception("guardian webhook failed", extra={"tenant": tenant})
             return False
