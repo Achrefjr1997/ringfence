@@ -70,6 +70,7 @@ from packages.risk.judge import DEFAULT_TIMEOUT_S as _JUDGE_DEFAULT_TIMEOUT_S
 from packages.obs.metrics import MetricsSnapshot, prometheus_text
 from packages.pipeline.pipeline import Pipeline
 from packages.policy.pack import PolicyPack, load_pack
+from packages.media.vad import VoiceActivityDetector
 from packages.policy.tenants import TenantRegistry, resolve_language, load_tenants, tenant_pattern
 from packages.risk.judge import Judge
 from packages.session.manager import SessionManager
@@ -78,6 +79,12 @@ from packages.storage.objectstore import LocalFsObjectStore, ObjectStore
 log = logging.getLogger("ringfence.gateway")
 
 _RATE = 16_000  # rejection reasons, in check order: AUTH, TENANT, CONSENT, BILLING, QUOTA, CAPACITY
+
+# A leg with no *speech* for this long is closed.  Not "no bytes": a leg that
+# hangs up badly often keeps streaming silence, and the ASR socket bills
+# wall-clock regardless of what is on it.
+_SESSION_IDLE_S = float(os.environ.get("RF_SESSION_IDLE_S", "120"))
+_IDLE_POLL_S = 5.0  # how often the receive loop wakes to check
 
 
 class _AccessLog(BaseHTTPMiddleware):
@@ -179,9 +186,14 @@ def _bearer(header: str | None) -> str | None:
 class GatewayMetrics:
     admitted: int = 0
     rejected: Counter[str] = field(default_factory=Counter)
+    legs_closed: Counter[str] = field(default_factory=Counter)  # reason -> n
 
     def as_dict(self) -> dict[str, object]:
-        return {"admitted": self.admitted, "rejected": dict(self.rejected)}
+        return {
+            "admitted": self.admitted,
+            "rejected": dict(self.rejected),
+            "legs_closed": dict(self.legs_closed),
+        }
 
 
 @dataclass
@@ -194,6 +206,7 @@ class _Live:
     api_key_id: str | None = None  # the key this session was admitted with, if any
     user_ref: str | None = None  # the employee the integration attributed this call to
     language: str = "en"  # the lexicon and warning templates this call is using
+    last_speech_at: float = 0.0  # VAD: when this session last carried a voice
     retain_audio: bool = False  # P7: tee PCM to disk for this session
     audio_buf: dict[str, bytearray] = field(default_factory=dict)  # leg -> raw PCM16
 
@@ -1194,6 +1207,7 @@ def create_app(
                 api_key_id=key_id,
                 user_ref=user_ref or None,
                 language=language,
+                last_speech_at=time.time(),
                 retain_audio=(the_store is not None and the_tenants.get(tenant).retain_audio),
             )
             sessions[session] = live
@@ -1211,13 +1225,32 @@ def create_app(
         live.seen_legs.add(leg)
 
         seq = 0
+        vad = VoiceActivityDetector(sample_rate=_RATE)
+        close_reason = "peer"
         try:
             while True:
-                msg = await ws.receive()
+                try:
+                    msg = await asyncio.wait_for(ws.receive(), timeout=_IDLE_POLL_S)
+                except (TimeoutError, asyncio.TimeoutError):
+                    msg = {}
                 if msg.get("type") == "websocket.disconnect":
+                    break
+                # A leg that hangs up badly often keeps streaming *silence*,
+                # so "no bytes" never fires -- only "no speech" does.  The ASR
+                # socket bills wall-clock either way.
+                if time.time() - live.last_speech_at > _SESSION_IDLE_S:
+                    close_reason = "idle"
+                    metrics.legs_closed["idle"] += 1
+                    log.info(
+                        "closing leg: no speech for %.0fs",
+                        time.time() - live.last_speech_at,
+                        extra={"session": session, "leg": leg},
+                    )
                     break
                 data = msg.get("bytes")
                 if data:
+                    if any(f.speech for f in vad.push(data)):
+                        live.last_speech_at = time.time()
                     if live.retain_audio:
                         live.audio_buf.setdefault(leg, bytearray()).extend(data)
                     await live.pipeline.feed(
@@ -1234,6 +1267,8 @@ def create_app(
         except WebSocketDisconnect:
             pass
         finally:
+            if close_reason == "peer":
+                metrics.legs_closed["peer"] += 1
             live.legs.discard(leg)
             if not live.legs:
                 sessions.pop(session, None)
