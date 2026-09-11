@@ -39,25 +39,45 @@ issue; if one leaks, delete it in the portal and issue a new one. Deleting
 is free and instant, and a key that has never been used has nothing
 depending on it.
 
+## Account level comes first, and it is the real gate
+
+Not the credit card. Telnyx tiers what an account may do, and this demo
+needs the top one:
+
+| Level | Reached by | Can this demo run? |
+|---|---|---|
+| **Pretrial** | signup | **No.** AI products only — Voice, Messaging, Wireless and Networking are all off, and the Public Key page shows "not permitted at this account level" because webhook validation belongs to that gated surface. The $25 is AI credit. |
+| **Trial** | identity via **LinkedIn or GitHub**, two attempts total | **No.** One verified number at a time, inbound accepted only *from* it and outbound placed only *to* it — so caller and callee collapse into one number. Plus one local number of the account's country of origin, lifetime. |
+| **Paid (L1)** | add funds | **No.** Since 24 Mar 2025 new L1 accounts order local numbers *only* in their country of origin. For a Tunisian account that means +216, which Telnyx does not sell. Paying buys nothing here. |
+| **Verified (L2)** | manual Telnyx review, ~48 h | **Yes** — no ordering restrictions, international numbers available. |
+
+Two consequences worth stating plainly.
+
+**The Trial → Paid step does not help.** The blocker is number ordering by
+country of origin, and only L2 lifts it. Budget the 48 h review, and answer
+their intended-use question concretely — real-time fraud detection on
+forked call audio, one number, low volume — because vague answers stall it.
+
+**The upgrade out of Pretrial needs no phone number.** LinkedIn or GitHub,
+one attempt each. That is the whole reason this account exists: Twilio
+required an SMS to +216 and would not send one. The same wall does not
+appear here.
+
 ## Setup
 
 ### 1. Telnyx portal
 
-1. **Buy a number.** Any country Telnyx sells. A Tunisian handset can ring a
-   French or UK number; the demo does not need a +216 DID.
-2. **Create a TeXML Application** (Voice → TeXML Applications) with its
+1. Reach **L2 / Verified** (above). Nothing below it can run this.
+2. **Buy a number** in any country Telnyx sells — a Tunisian handset can
+   ring a French or UK number, so no +216 DID is needed.
+3. **Create a TeXML Application** (Voice → TeXML Applications) with its
    voice webhook pointed at `https://<tunnel>/voice`, method POST.
-3. **Assign the number** to that application.
-4. Copy the **Public Key** from Account Settings.
+4. **Assign the number** to that application.
+5. Copy the **Public Key** from Account Settings → Public Key.
 
-Two things to check in the portal rather than trust from here, because
-trial terms change and a demo is the wrong place to discover them:
-
-- whether a **pretrial/trial** account restricts inbound calls to verified
-  numbers, as Twilio's does. If it does, verify both handsets first.
-- the **termination rate to Tunisian mobile** for the `<Dial>` leg. The
-  per-minute CPaaS cost is cents; international mobile termination is the
-  part worth reading before you loop it all afternoon.
+Check the **termination rate to Tunisian mobile** for the `<Dial>` leg
+before looping this all afternoon. The per-minute CPaaS cost is cents;
+international mobile termination is the part that adds up.
 
 ### 2. Local
 
@@ -106,6 +126,8 @@ customer call, `docs/LEGAL_AUDIO.md` is the checklist.
 
 | Symptom | Cause |
 |---|---|
+| Public Key page: "not permitted at this account level" | Pretrial. No Voice product at all — see the table at the top. |
+| Number search shows only +216, or nothing | L1 ordering restriction: local numbers in the country of origin only. Needs L2. |
 | 403 from `/voice`, `<Hangup/>` | `RF_TELNYX_PUBLIC_KEY` wrong or absent. Public Key page, not API Keys. |
 | 503 from `/voice` | `cryptography` missing — install the `db` extra. Deliberately not a 403: "cannot verify" is not "forged". |
 | Webhook never arrives | Tunnel URL not in the TeXML app, or the number not assigned to it. |
