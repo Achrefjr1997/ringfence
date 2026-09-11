@@ -179,6 +179,46 @@ def test_a_signed_webhook_returns_texml_with_stream_then_dial() -> None:
     assert "<Dial><Number>+21612345678</Number></Dial>" in r.text
 
 
+def test_without_a_dial_target_the_line_is_held_and_capture_still_starts() -> None:
+    """A trial account has one verified number and cannot bridge a second
+    leg. Rather than emit a <Dial> that will fail, hold the line -- the fork
+    is what the demo needs, and it is unchanged."""
+    body, ts = b"From=%2B216111&To=%2B12025550100", str(int(time.time()))
+    cfg = Config(
+        public_key=PUBLIC_KEY,
+        public_url="https://demo.example",
+        dial_to="",
+        hold_notice="Cet appel est analyse.",
+        api_key="rf_key",
+        language="fr",
+    )
+    with TestClient(create_app(cfg, uplink=_RecordingUplink())) as c:  # type: ignore[arg-type]
+        r = c.post(
+            "/voice",
+            content=body,
+            headers={"telnyx-signature-ed25519": _sign(body, ts), "telnyx-timestamp": ts},
+        )
+    assert r.status_code == 200
+    assert 'track="both_tracks"' in r.text  # capture is identical
+    assert "wss://demo.example/media" in r.text
+    assert "<Dial>" not in r.text  # nobody to bridge to
+    assert "<Pause" in r.text  # but the call stays up
+    assert 'language="fr-FR"' in r.text and "Cet appel est analyse." in r.text
+
+
+def test_a_dial_target_still_bridges() -> None:
+    """Hold mode must not become the default by accident."""
+    body, ts = b"From=%2B216111", str(int(time.time()))
+    with TestClient(create_app(CFG, uplink=_RecordingUplink())) as c:  # type: ignore[arg-type]
+        r = c.post(
+            "/voice",
+            content=body,
+            headers={"telnyx-signature-ed25519": _sign(body, ts), "telnyx-timestamp": ts},
+        )
+    assert "<Dial><Number>+21612345678</Number></Dial>" in r.text
+    assert "<Pause" not in r.text
+
+
 # -- the envelope ------------------------------------------------------
 
 

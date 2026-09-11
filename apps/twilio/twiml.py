@@ -16,7 +16,7 @@ import base64
 import hashlib
 import hmac
 
-from packages.ingress.mediastream.markup import reject, stream_and_dial
+from packages.ingress.mediastream.markup import reject, stream_and_dial, stream_and_hold
 
 
 def verify_signature(*, auth_token: str, url: str, params: dict[str, str], signature: str) -> bool:
@@ -33,4 +33,4 @@ def verify_signature(*, auth_token: str, url: str, params: dict[str, str], signa
     return hmac.compare_digest(base64.b64encode(digest).decode(), signature)
 
 
-__all__ = ["reject", "stream_and_dial", "verify_signature"]
+__all__ = ["reject", "stream_and_dial", "stream_and_hold", "verify_signature"]
