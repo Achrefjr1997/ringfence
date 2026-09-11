@@ -15,6 +15,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
@@ -22,6 +24,37 @@ from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
 log = logging.getLogger("ringfence.uplink")
+
+# Shapes that are definitely *provider* credentials, not ours.  Each is a
+# documented, stable format, and none can collide with a RingFence key
+# (``secrets.token_urlsafe``, which is mixed-case base64url and never 32
+# characters of one case).
+_PROVIDER_CREDENTIALS = (
+    (re.compile(r"^KEY[0-9A-F]{10,}"), "a Telnyx API key"),
+    (re.compile(r"^(AC|SK)[0-9a-f]{32}$"), "a Twilio SID"),
+    (re.compile(r"^[0-9a-f]{32}$"), "a Twilio auth token"),
+)
+
+
+def read_gateway_key(env: Mapping[str, str], var: str) -> str:
+    """Read the **RingFence** API key for ``/ws/capture`` out of ``env``.
+
+    The whole point of this function is the check below.  Setting up an
+    ingress means holding a provider API key -- you are on the portal page
+    that shows it -- while filling in a variable that wants a different
+    secret entirely.  Without the check the mistake surfaces as a 401 from
+    our own gateway during a live call, which looks like a RingFence bug
+    and is the worst possible moment to debug one.
+    """
+    value = env.get(var, "")
+    for pattern, what in _PROVIDER_CREDENTIALS:
+        if pattern.match(value):
+            raise ValueError(
+                f"{var} looks like {what}, but it wants a RingFence API key "
+                f"(the one that authenticates us to /ws/capture). The provider "
+                f"credential belongs in the webhook-verification variable instead."
+            )
+    return value
 
 
 @dataclass(frozen=True, slots=True)
