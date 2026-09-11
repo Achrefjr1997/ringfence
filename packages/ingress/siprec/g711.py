@@ -53,6 +53,26 @@ _ALAW_TABLE: Int16 = np.array([_alaw_sample(b) for b in range(256)], dtype=np.in
 # second reference implementation to keep in step with the decoder.
 _ULAW_ORDER = np.argsort(_ULAW_TABLE, kind="stable")
 _ULAW_SORTED = _ULAW_TABLE[_ULAW_ORDER].astype(np.int32)
+_ALAW_ORDER = np.argsort(_ALAW_TABLE, kind="stable")
+_ALAW_SORTED = _ALAW_TABLE[_ALAW_ORDER].astype(np.int32)
+
+
+def _nearest(
+    samples: Int16 | bytes,
+    order: npt.NDArray[np.intp],
+    sorted_values: npt.NDArray[np.int32],
+) -> bytes:
+    """Pick, for each sample, the codec byte whose decoded value is nearest.
+
+    Correct by construction against whichever decode table is passed in, so
+    an encoder can never drift from its decoder.
+    """
+    src = np.frombuffer(samples, dtype="<i2") if isinstance(samples, bytes) else samples
+    x = np.asarray(src, dtype=np.int32)
+    hi = np.clip(np.searchsorted(sorted_values, x), 1, len(sorted_values) - 1)
+    lo = hi - 1
+    nearer_lo = np.abs(x - sorted_values[lo]) <= np.abs(x - sorted_values[hi])
+    return bytes(order[np.where(nearer_lo, lo, hi)].astype(np.uint8).tobytes())
 
 
 def ulaw_decode(payload: bytes) -> Int16:
@@ -62,13 +82,14 @@ def ulaw_decode(payload: bytes) -> Int16:
 
 def ulaw_encode(samples: Int16 | bytes) -> bytes:
     """Linear PCM16 -> mu-law bytes (nearest representable level)."""
-    src = np.frombuffer(samples, dtype="<i2") if isinstance(samples, bytes) else samples
-    x = np.asarray(src, dtype=np.int32)
-    hi = np.clip(np.searchsorted(_ULAW_SORTED, x), 1, len(_ULAW_SORTED) - 1)
-    lo = hi - 1
-    nearer_lo = np.abs(x - _ULAW_SORTED[lo]) <= np.abs(x - _ULAW_SORTED[hi])
-    pick = np.where(nearer_lo, lo, hi)
-    return bytes(_ULAW_ORDER[pick].astype(np.uint8).tobytes())
+    return _nearest(samples, _ULAW_ORDER, _ULAW_SORTED)
+
+
+def alaw_encode(samples: Int16 | bytes) -> bytes:
+    """Linear PCM16 -> A-law bytes.  Telnyx negotiates PCMA as well as PCMU,
+    so the module is symmetric in both codecs rather than only the one
+    Twilio uses."""
+    return _nearest(samples, _ALAW_ORDER, _ALAW_SORTED)
 
 
 def alaw_decode(payload: bytes) -> Int16:

@@ -1,19 +1,18 @@
-"""Twilio Media Streams ingress.
+"""Telnyx media-streaming ingress.
 
-One process, one public surface, two routes:
+The same shape as ``apps/twilio`` -- one Starlette app, one port, a TeXML
+webhook and a media WebSocket -- because TeXML is TwiML-compatible and the
+audio envelope differs only in spelling.  What actually differs:
 
-    POST /voice   the TwiML webhook Twilio hits when a call arrives
-    WS   /media   the audio fork Twilio opens because that TwiML asked for it
+* **Ed25519** webhook signatures instead of HMAC-SHA1;
+* ``stream_id`` / ``call_control_id`` / ``sample_rate`` naming;
+* the codec is negotiable (PCMU or PCMA), agreed in the ``start`` frame and
+  threaded into every later media frame.
 
-The gateway is untouched — this speaks to it as an ordinary capture client,
-exactly as ``apps/siprec`` does, so a call forked from a CPaaS looks like
-any other two-leg session.
-
-Why this shape and not a handset SDK: call audio cannot be taken off a
-phone.  iOS never exposed it and Android closed the Accessibility-API
-workaround in May 2022.  Taking it from the network is the only path, and it
-has the better property anyway — nothing is installed on the protected
-person's phone, and they cannot turn it off.
+Telnyx exists in this repo because Twilio would not send an SMS
+verification code to a Tunisian number, so the account could not be created
+at all.  That is precisely the situation the provider-neutral parser in
+``packages/ingress/mediastream`` was built for.
 """
 
 from __future__ import annotations
@@ -30,20 +29,21 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from apps.twilio.twiml import reject, stream_and_dial, verify_signature
+from apps.telnyx.webhook import SignatureUnavailableError, verify_signature
 from packages.ingress.capture_uplink import CaptureUplink, UplinkConfig
 from packages.ingress.mediastream import MediaFormatError, leg_for_track
-from packages.ingress.mediastream.twilio import parse
+from packages.ingress.mediastream.markup import reject, stream_and_dial
 from packages.ingress.mediastream.session import StreamSession
+from packages.ingress.mediastream.telnyx import parse
 
-log = logging.getLogger("ringfence.twilio")
+log = logging.getLogger("ringfence.telnyx")
 
 
 @dataclass(frozen=True, slots=True)
 class Config:
-    auth_token: str = ""  # Twilio account auth token -- signs the webhook
-    public_url: str = ""  # https://<tunnel-or-host>, how Twilio reaches us
-    dial_to: str = ""  # the protected person's real phone, E.164
+    public_key: str = ""  # Telnyx account Ed25519 public key (base64)
+    public_url: str = ""  # https://<tunnel-or-host> Telnyx reaches us on
+    dial_to: str = ""  # the protected person's phone, E.164
     gateway_ws: str = "ws://localhost:8000/ws/capture"
     api_key: str = ""
     tenant: str | None = None
@@ -54,14 +54,14 @@ class Config:
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
         e = env if env is not None else os.environ
         return cls(
-            auth_token=e.get("RF_TWILIO_AUTH_TOKEN", ""),
-            public_url=e.get("RF_TWILIO_PUBLIC_URL", "").rstrip("/"),
-            dial_to=e.get("RF_TWILIO_DIAL_TO", ""),
+            public_key=e.get("RF_TELNYX_PUBLIC_KEY", ""),
+            public_url=e.get("RF_TELNYX_PUBLIC_URL", "").rstrip("/"),
+            dial_to=e.get("RF_TELNYX_DIAL_TO", ""),
             gateway_ws=e.get("RF_GATEWAY_WS", "ws://localhost:8000/ws/capture"),
-            api_key=e.get("RF_TWILIO_API_KEY", ""),
-            tenant=e.get("RF_TWILIO_TENANT") or None,
-            consent_token=e.get("RF_TWILIO_CONSENT_TOKEN") or None,
-            language=e.get("RF_TWILIO_LANGUAGE") or None,
+            api_key=e.get("RF_TELNYX_API_KEY", ""),
+            tenant=e.get("RF_TELNYX_TENANT") or None,
+            consent_token=e.get("RF_TELNYX_CONSENT_TOKEN") or None,
+            language=e.get("RF_TELNYX_LANGUAGE") or None,
         )
 
     @property
@@ -84,44 +84,43 @@ def create_app(config: Config | None = None, *, uplink: CaptureUplink | None = N
     )
 
     async def voice(request: Request) -> Response:
-        """Twilio's webhook. Fork both tracks, then ring the real phone."""
-        # Twilio posts application/x-www-form-urlencoded.  Parsed with
-        # stdlib rather than Starlette's request.form(), which drags in
-        # python-multipart for a multipart body Twilio never sends.
-        body = (await request.body()).decode("utf-8", "replace")
-        params = dict(parse_qsl(body, keep_blank_values=True))
-        url = f"{cfg.public_url}{request.url.path}"
-        if not verify_signature(
-            auth_token=cfg.auth_token,
-            url=url,
-            params=params,
-            signature=request.headers.get("X-Twilio-Signature", ""),
-        ):
-            # Unsigned means not Twilio. Refuse rather than place a call.
-            log.warning("rejected unsigned voice webhook from %s", request.client)
+        """TeXML webhook: fork both tracks, then ring the real phone."""
+        body = await request.body()
+        try:
+            ok = verify_signature(
+                public_key=cfg.public_key,
+                body=body,
+                signature=request.headers.get("telnyx-signature-ed25519", ""),
+                timestamp=request.headers.get("telnyx-timestamp", ""),
+            )
+        except SignatureUnavailableError:
+            # "cannot verify" is not "forged" -- say so with a different code
+            # so a missing dependency is never read as an attack.
+            log.exception("cannot verify Telnyx signatures; refusing the call")
+            return Response(
+                reject("verification unavailable"), media_type="text/xml", status_code=503
+            )
+        if not ok:
+            log.warning("rejected unsigned TeXML webhook from %s", request.client)
             return Response(reject("bad signature"), media_type="text/xml", status_code=403)
 
-        to = params.get("To", "")
-        frm = params.get("From", "")
-        log.info("inbound call %s -> %s", frm, to)
+        params = dict(parse_qsl(body.decode("utf-8", "replace"), keep_blank_values=True))
+        log.info("inbound call %s -> %s", params.get("From", ""), params.get("To", ""))
         return Response(
             stream_and_dial(stream_url=cfg.stream_url, dial_to=cfg.dial_to),
             media_type="text/xml",
         )
 
     async def media(ws: WebSocket) -> None:
-        """The audio fork. One socket in, one capture leg per track out."""
         await ws.accept()
         session: StreamSession | None = None
+        codec = "PCMU"
         try:
             while True:
                 raw = await ws.receive_text()
                 try:
-                    event = parse(raw)
+                    event = parse(raw, encoding=codec)
                 except MediaFormatError:
-                    # A codec we cannot decode is a misconfiguration, not a
-                    # blip: keeping the socket open would feed the detector
-                    # noise that scores like silence.
                     log.exception("unsupported media format; closing stream")
                     break
                 if event is None:
@@ -129,11 +128,12 @@ def create_app(config: Config | None = None, *, uplink: CaptureUplink | None = N
 
                 if event.kind == "start":
                     sid = event.call_id or event.stream_id
+                    codec = event.params.get("encoding", codec)
                     session = StreamSession(sid)
                     user = event.params.get("user", "")
                     if user:
                         up.set_attribution(sid, user, event.params.get("user_label", ""))
-                    log.info("stream open session=%s params=%s", sid, sorted(event.params))
+                    log.info("stream open session=%s codec=%s", sid, codec)
 
                 elif event.kind == "media" and session is not None and event.pcm is not None:
                     leg = leg_for_track(event.track)
