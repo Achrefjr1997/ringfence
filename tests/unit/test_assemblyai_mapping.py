@@ -57,6 +57,7 @@ def test_turn_from_message_without_words() -> None:
     assert turn.confidence == 1.0
     assert turn.is_final is False
     assert turn.is_formatted is False
+    assert turn.speaker_label is None
 
 
 def test_url_has_sample_rate_and_format_turns() -> None:
@@ -65,6 +66,65 @@ def test_url_has_sample_rate_and_format_turns() -> None:
     assert "sample_rate=16000" in stream.url
     assert "format_turns=true" in stream.url
     assert "language=en" in stream.url
+    assert "speaker_labels" not in stream.url  # opt-in only, not default cost/risk
+
+
+# -- diarization plumbing (public beta upstream -- a cross-check signal, ------
+# -- never something detection depends on) ------------------------------
+
+
+def test_diarize_off_by_default_is_silent_on_the_wire() -> None:
+    """SPEC does not set diarize, so nothing about it should appear -- a
+    provider that ignores an unknown param silently is a worse failure mode
+    than one that never sends it."""
+    assert AssemblyAIStream("k", SPEC).url.count("speaker") == 0
+
+
+def test_diarize_true_adds_speaker_labels_to_the_url() -> None:
+    spec = StreamSpec(session_id="s1", leg_id="far", language="en", diarize=True)
+    assert "speaker_labels=true" in AssemblyAIStream("k", spec).url
+
+
+def test_max_speakers_only_appears_when_diarize_is_on() -> None:
+    """A stray max_speakers with diarize=False would be a silent no-op on
+    AssemblyAI's side -- catch the mistake in our own URL instead."""
+    spec = StreamSpec(session_id="s1", leg_id="far", diarize=False, max_speakers=2)
+    assert "max_speakers" not in AssemblyAIStream("k", spec).url
+
+    spec2 = StreamSpec(session_id="s1", leg_id="far", diarize=True, max_speakers=2)
+    assert "max_speakers=2" in AssemblyAIStream("k", spec2).url
+
+
+def test_turn_from_message_carries_the_speaker_label_when_present() -> None:
+    msg = {
+        "type": "Turn",
+        "turn_order": 1,
+        "transcript": "your account is locked",
+        "end_of_turn": True,
+        "speaker_label": "B",
+        "words": [
+            {"text": "your", "start": 0, "end": 200, "confidence": 0.9, "speaker": "B"},
+            {"text": "account", "start": 200, "end": 600, "confidence": 0.9, "speaker": "B"},
+        ],
+    }
+    turn = _turn_from_message(msg, session_id="s", leg_id="mixed", language=None)
+    assert turn.speaker_label == "B"
+    assert [w.speaker_label for w in turn.words] == ["B", "B"]
+
+
+def test_turn_from_message_speaker_label_absent_when_diarize_was_off() -> None:
+    """The ordinary shape -- no speaker_label key at all, not an empty one --
+    since diarize=False means AssemblyAI never sends the field."""
+    msg = {
+        "type": "Turn",
+        "turn_order": 0,
+        "transcript": "hello",
+        "end_of_turn": True,
+        "words": [{"text": "hello", "start": 0, "end": 300, "confidence": 0.9}],
+    }
+    turn = _turn_from_message(msg, session_id="s", leg_id="far", language=None)
+    assert turn.speaker_label is None
+    assert turn.words[0].speaker_label is None
 
 
 async def test_feed_coalesces_to_100ms_chunks() -> None:

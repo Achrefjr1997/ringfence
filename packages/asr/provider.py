@@ -36,6 +36,13 @@ class StreamSpec:
     language: str | None = None
     format_turns: bool = True
     keyterms: tuple[str, ...] = field(default_factory=tuple)
+    # Ask the provider to tell voices apart within this stream (AssemblyAI:
+    # "public beta, ongoing infrastructure improvements" as of 2026 -- a
+    # cross-check signal, never something detection depends on). Only
+    # meaningful for a single mixed-audio leg; a provider with no support
+    # ignores it. See packages/media/role.py.
+    diarize: bool = False
+    max_speakers: int | None = None  # hard cap, only sent when diarize=True
 
 
 @runtime_checkable

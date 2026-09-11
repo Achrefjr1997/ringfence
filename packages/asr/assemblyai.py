@@ -8,6 +8,10 @@ Protocol specifics that bite if you get them wrong:
 * audio goes up as **binary** frames, PCM16 little-endian mono
 * messages down are JSON: ``Begin`` / ``Turn`` / ``Termination``
 * close by sending ``{"type": "Terminate"}``
+* ``StreamSpec.diarize=True`` adds ``speaker_labels=true`` (and
+  ``max_speakers`` when set); AssemblyAI then adds ``speaker_label`` to each
+  Turn and ``speaker`` to each final word.  Public beta on their side --
+  never assume it arrives, and never make detection depend on it.
 * a session is capped at 3 h; reconnect at 2h45m and carry the last 30 s of
   audio so the new session has acoustic context.
 
@@ -67,6 +71,7 @@ def _turn_from_message(
             start=float(w["start"]) / 1000.0,
             end=float(w["end"]) / 1000.0,
             confidence=float(w.get("confidence", 1.0)),
+            speaker_label=w.get("speaker"),  # AssemblyAI's key, not ours -- see Word docstring
         )
         for w in raw_words
     )
@@ -90,6 +95,7 @@ def _turn_from_message(
         words=words,
         confidence=confidence,
         language=language,
+        speaker_label=msg.get("speaker_label"),
     )
 
 
@@ -141,6 +147,10 @@ class AssemblyAIStream:
         q += f"&format_turns={'true' if self._spec.format_turns else 'false'}"
         if self._spec.language:
             q += f"&language={self._spec.language}"
+        if self._spec.diarize:
+            q += "&speaker_labels=true"
+            if self._spec.max_speakers is not None:
+                q += f"&max_speakers={self._spec.max_speakers}"
         return self._base_url + q
 
     async def start(self) -> None:
@@ -309,7 +319,10 @@ class AssemblyAIStreaming:
     name = "assemblyai"
     capabilities = ASRCapabilities(
         languages=("en", "fr", "es", "de", "it", "pt", "nl"),
-        diarisation=False,
+        # Public beta as of 2026 ("ongoing infrastructure improvements" --
+        # AssemblyAI's own wording). Opt in via StreamSpec.diarize; treat it
+        # as a cross-check signal, not something detection depends on.
+        diarisation=True,
         keyterms=True,
         max_concurrency=None,
     )
