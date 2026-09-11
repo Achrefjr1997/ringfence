@@ -10,6 +10,12 @@ class Word:
     start: float
     end: float
     confidence: float
+    # Which of the provider's diarized voices said this word ("A", "B", ...).
+    # Not a Role -- diarization tells voices apart, it does not know which
+    # one is the caller. None whenever diarization was not requested or the
+    # provider does not offer it. See packages/media/role.py for how this
+    # feeds a cross-check on the acoustic classifier's guess.
+    speaker_label: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +31,7 @@ class Turn:
     words: tuple[Word, ...]
     confidence: float
     language: str | None = None
+    speaker_label: str | None = None  # see Word.speaker_label
 
 
 @dataclass(frozen=True, slots=True)
