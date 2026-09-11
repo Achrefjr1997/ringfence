@@ -30,7 +30,7 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from apps.telnyx.webhook import SignatureUnavailableError, verify_signature
-from packages.ingress.capture_uplink import CaptureUplink, UplinkConfig
+from packages.ingress.capture_uplink import CaptureUplink, UplinkConfig, read_gateway_key
 from packages.ingress.mediastream import MediaFormatError, leg_for_track
 from packages.ingress.mediastream.markup import reject, stream_and_dial
 from packages.ingress.mediastream.session import StreamSession
@@ -41,11 +41,11 @@ log = logging.getLogger("ringfence.telnyx")
 
 @dataclass(frozen=True, slots=True)
 class Config:
-    public_key: str = ""  # Telnyx account Ed25519 public key (base64)
+    public_key: str = ""  # Telnyx account Ed25519 public key (base64), verifies inbound
     public_url: str = ""  # https://<tunnel-or-host> Telnyx reaches us on
     dial_to: str = ""  # the protected person's phone, E.164
     gateway_ws: str = "ws://localhost:8000/ws/capture"
-    api_key: str = ""
+    api_key: str = ""  # RingFence key, authenticates us outbound -- not a Telnyx one
     tenant: str | None = None
     consent_token: str | None = None
     language: str | None = None
@@ -58,7 +58,7 @@ class Config:
             public_url=e.get("RF_TELNYX_PUBLIC_URL", "").rstrip("/"),
             dial_to=e.get("RF_TELNYX_DIAL_TO", ""),
             gateway_ws=e.get("RF_GATEWAY_WS", "ws://localhost:8000/ws/capture"),
-            api_key=e.get("RF_TELNYX_API_KEY", ""),
+            api_key=read_gateway_key(e, "RF_TELNYX_GATEWAY_KEY"),
             tenant=e.get("RF_TELNYX_TENANT") or None,
             consent_token=e.get("RF_TELNYX_CONSENT_TOKEN") or None,
             language=e.get("RF_TELNYX_LANGUAGE") or None,

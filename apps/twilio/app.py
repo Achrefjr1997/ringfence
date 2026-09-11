@@ -31,7 +31,7 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from apps.twilio.twiml import reject, stream_and_dial, verify_signature
-from packages.ingress.capture_uplink import CaptureUplink, UplinkConfig
+from packages.ingress.capture_uplink import CaptureUplink, UplinkConfig, read_gateway_key
 from packages.ingress.mediastream import MediaFormatError, leg_for_track
 from packages.ingress.mediastream.twilio import parse
 from packages.ingress.mediastream.session import StreamSession
@@ -45,7 +45,7 @@ class Config:
     public_url: str = ""  # https://<tunnel-or-host>, how Twilio reaches us
     dial_to: str = ""  # the protected person's real phone, E.164
     gateway_ws: str = "ws://localhost:8000/ws/capture"
-    api_key: str = ""
+    api_key: str = ""  # RingFence key, authenticates us outbound -- not a Twilio one
     tenant: str | None = None
     consent_token: str | None = None
     language: str | None = None
@@ -58,7 +58,7 @@ class Config:
             public_url=e.get("RF_TWILIO_PUBLIC_URL", "").rstrip("/"),
             dial_to=e.get("RF_TWILIO_DIAL_TO", ""),
             gateway_ws=e.get("RF_GATEWAY_WS", "ws://localhost:8000/ws/capture"),
-            api_key=e.get("RF_TWILIO_API_KEY", ""),
+            api_key=read_gateway_key(e, "RF_TWILIO_GATEWAY_KEY"),
             tenant=e.get("RF_TWILIO_TENANT") or None,
             consent_token=e.get("RF_TWILIO_CONSENT_TOKEN") or None,
             language=e.get("RF_TWILIO_LANGUAGE") or None,
