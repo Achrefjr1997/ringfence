@@ -38,6 +38,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from apps.gateway.auth import authenticate, build_auth_routes, read_json_body
 from apps.gateway.call_recorder import CallLedgerRecorder, TranscriptRecorder
 from apps.gateway.guardian import GuardianDispatcher
+from apps.gateway.intervene_dispatch import InterventionDispatcher
 from apps.gateway.orgs import build_org_routes
 from apps.gateway.ratelimit import RateLimiter, RateLimitMiddleware
 from apps.gateway.tokens import read_token
@@ -320,6 +321,7 @@ def create_app(
     billing_provider: BillingProvider | None = None,
     asr: ASRProvider | None = None,
     guardian_dispatcher: GuardianDispatcher | None = None,
+    intervene_dispatcher: InterventionDispatcher | None = None,
     session_secret: str | None = None,
     tenants: TenantRegistry | None = None,
     quota_per_tenant: int | None = None,
@@ -599,6 +601,8 @@ def create_app(
                     yield {"event": "decision", "data": json.dumps(payload)}
                 elif subject.endswith(".turn"):
                     yield {"event": "turn", "data": json.dumps(payload)}
+                elif subject.endswith(".warning"):
+                    yield {"event": "warning", "data": json.dumps(payload)}
                 elif subject.endswith(".session.closed"):
                     yield {"event": "end", "data": json.dumps(payload)}
                     return
@@ -621,6 +625,8 @@ def create_app(
                     yield {"event": "decision", "data": json.dumps(payload)}
                 elif subject.endswith(".turn"):
                     yield {"event": "turn", "data": json.dumps(payload)}
+                elif subject.endswith(".warning"):
+                    yield {"event": "warning", "data": json.dumps(payload)}
                 elif subject.endswith(".session.closed"):
                     yield {"event": "end", "data": json.dumps(payload)}
                 if await request.is_disconnected():
@@ -1375,6 +1381,13 @@ def create_app(
 
     # guardian webhook dispatch: watch rf.*.decision, fire on INTERVENE
     guardian = guardian_dispatcher or GuardianDispatcher(the_tenants, the_pack, dry_run=cfg.dry_run)
+    # live coaching: same decision stream, republished as rf.*.warning for
+    # the protected person's own view (console Live tab) -- see
+    # apps/gateway/intervene_dispatch.py for why this is a separate
+    # dispatcher rather than reusing guardian's.
+    intervene_live = intervene_dispatcher or InterventionDispatcher(
+        the_pack, the_bus, dry_run=cfg.dry_run
+    )
     # call ledger: watch rf.*.decision, append the escalation graph
     recorder = CallLedgerRecorder(the_ledger)
     # per-call transcript: buffer rf.*.turn, flush on close (RF_RETAIN_TRANSCRIPTS)
@@ -1393,6 +1406,7 @@ def create_app(
     async def _lifespan(_: Starlette) -> AsyncIterator[None]:
         tasks = [
             asyncio.create_task(guardian.run(the_bus)),
+            asyncio.create_task(intervene_live.run()),
             asyncio.create_task(recorder.run(the_bus)),
             asyncio.create_task(transcriber.run(the_bus)),
             asyncio.create_task(_audio_retention_sweep()),
@@ -1423,4 +1437,5 @@ def create_app(
     app.state.object_store = the_store
     app.state.asr_router = the_router
     app.state.guardian = guardian
+    app.state.intervene_live = intervene_live
     return app
