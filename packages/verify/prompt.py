@@ -55,7 +55,10 @@ def build_prompt(institution: Institution, amount: str | None) -> tuple[str, str
         f"- After reporting, thank them in one short sentence and stop talking."
     )
     greeting = (
-        f"Hello, this is an automated verification assistant calling on behalf of a "
-        f"{name} customer. I have one quick question for the {desk} team."
+        # "one of {name}'s customers", not "a {name} customer": the article
+        # would be wrong for every name starting with a vowel sound (heard
+        # live as "a Amazon customer").
+        f"Hello, this is an automated verification assistant calling on behalf of one "
+        f"of {name}'s customers. I have one quick question for the {desk} team."
     )
     return system_prompt, greeting

@@ -1,0 +1,22 @@
+# Opt-in overlay: the REAL verification agent (packages/verify/live.py).
+#
+#   docker compose --env-file .env #     -f infra/compose/docker-compose.yml #     -f infra/compose/docker-compose.verify-live.yml up -d --build gateway
+#
+# then open http://localhost:8000/verify-desk in a second tab to answer.
+#
+# The base file pins RF_DRY_RUN=true on purpose (tests/unit/test_compose.py):
+# locally the action plane sends nothing. A Voice Agent session is an external
+# side effect -- it bills per minute and speaks to a third party -- so the
+# session guard refuses it under dry-run (invariant #4). Turning dry-run off is
+# therefore a deliberate act, in this separate file, never a default.
+#
+# With dry-run off, the guardian webhook also fires for any tenant in
+# config/tenants.yaml that has a guardian_webhook_url. Demo tenants
+# ("default", "console") have none.
+services:
+  gateway:
+    environment:
+      RF_DRY_RUN: "false"
+      RF_VERIFY_ENABLED: "true"
+      RF_VERIFY_AGENT: voice_agent
+      RF_ASR_PROVIDER: ${RF_ASR_PROVIDER:-assemblyai}

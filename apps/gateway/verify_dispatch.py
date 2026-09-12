@@ -24,6 +24,7 @@ depth, not as the load-bearing one.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from collections import OrderedDict
@@ -95,12 +96,25 @@ class VerificationDispatcher:
         if not self._enabled:
             log.info("verification disabled (RF_VERIFY_ENABLED unset); dispatcher idle")
             return
-        async with contextlib.aclosing(self._bus.subscribe("rf.*")) as stream:
-            async for subject, payload in stream:
-                if subject.endswith(".turn"):
-                    await self.on_turn(subject, payload)
-                elif subject.endswith(".decision"):
-                    await self.on_decision(subject, payload)
+        # A real verification is a conversation of tens of seconds. Awaiting it
+        # here would stop this loop consuming a bus whose buffer drops the
+        # oldest events once a subscriber falls behind -- other sessions'
+        # turns, and so the institution names they carry, would be lost. So
+        # decisions run as tasks. The budget is claimed before a task's first
+        # await, so concurrency and once-per-session still hold.
+        inflight: set[asyncio.Task[None]] = set()
+        try:
+            async with contextlib.aclosing(self._bus.subscribe("rf.*")) as stream:
+                async for subject, payload in stream:
+                    if subject.endswith(".turn"):
+                        await self.on_turn(subject, payload)
+                    elif subject.endswith(".decision"):
+                        task = asyncio.create_task(self.on_decision(subject, payload))
+                        inflight.add(task)
+                        task.add_done_callback(inflight.discard)
+        finally:
+            for task in list(inflight):
+                task.cancel()
 
     # -- the caller's own words -------------------------------------------
 

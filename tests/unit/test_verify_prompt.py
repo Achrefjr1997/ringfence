@@ -54,3 +54,9 @@ def test_the_prompt_instructs_the_report_tool() -> None:
 def test_the_agent_is_told_it_knows_nothing_about_the_customer() -> None:
     system_prompt, _ = build_prompt(_INST, None)
     assert "never ask for or offer personal" in system_prompt.lower()
+
+
+def test_the_greeting_needs_no_article_before_the_name() -> None:
+    """Heard live: "on behalf of a Amazon customer"."""
+    _, greeting = build_prompt(_INST, None)
+    assert " a Amazon" not in greeting and "Amazon's customers" in greeting

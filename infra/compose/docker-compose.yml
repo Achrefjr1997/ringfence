@@ -46,9 +46,11 @@ services:
       RF_ASR_PROVIDER: ${RF_ASR_PROVIDER:-null} # null | assemblyai
       ASSEMBLYAI_API_KEY: ${ASSEMBLYAI_API_KEY:-}
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
-      # verification agent (packages/verify): off unless set. Phase 1 is
-      # simulated and labels every result as such on the console.
+      # verification agent (packages/verify): off unless set. Simulated (and
+      # labelled so on the console) unless RF_VERIFY_AGENT=voice_agent. The real
+      # agent is refused under dry-run, so it needs docker-compose.verify-live.yml.
       RF_VERIFY_ENABLED: ${RF_VERIFY_ENABLED:-false}
+      RF_VERIFY_AGENT: ${RF_VERIFY_AGENT:-simulated}
     ports: ["8000:8000"]
     depends_on: [nats, redis, postgres]
 

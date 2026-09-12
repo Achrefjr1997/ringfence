@@ -39,7 +39,8 @@ from apps.gateway.auth import authenticate, build_auth_routes, read_json_body
 from apps.gateway.call_recorder import CallLedgerRecorder, TranscriptRecorder
 from apps.gateway.guardian import GuardianDispatcher
 from apps.gateway.intervene_dispatch import InterventionDispatcher
-from apps.gateway.verify_dispatch import VerificationDispatcher
+from apps.gateway.verify_desk import build_verify_desk_routes
+from apps.gateway.verify_dispatch import VerificationDispatcher, Verifier
 from apps.gateway.orgs import build_org_routes
 from apps.gateway.ratelimit import RateLimiter, RateLimitMiddleware
 from apps.gateway.tokens import read_token
@@ -64,7 +65,7 @@ from packages.calls.transcripts import InMemoryTranscriptStore, TranscriptStore
 from packages.contracts.audio import Frame, LegSpec, Mode, RoleHint, SessionDescriptor
 from packages.contracts.events import EventBus, InProcessBus
 from packages.contracts.risk import State
-from packages.contracts.settings import get_settings
+from packages.contracts.settings import Settings, get_settings
 from packages.identity.models import User
 from packages.identity.store import IdentityStore, InMemoryIdentityStore
 from packages.intervene.cases import Case, CaseStore, InMemoryCaseStore
@@ -78,6 +79,9 @@ from packages.intervene.coach import CoachGenerator
 from packages.risk.judge import Judge
 from packages.session.manager import SessionManager
 from packages.storage.objectstore import LocalFsObjectStore, ObjectStore
+from packages.verify.agent import AgentSocket, VoiceAgentSession
+from packages.verify.desk import DeskExchange
+from packages.verify.live import VoiceAgentVerifier
 from packages.verify.simulated import SimulatedVerifier
 
 log = logging.getLogger("ringfence.gateway")
@@ -209,6 +213,38 @@ def _default_coach_factory() -> Callable[[PolicyPack], CoachGenerator | None]:
         return LLMCoach(caller, model=pack.judge.model)
 
     return factory
+
+
+def _default_verifier(cfg: Settings, exchange: DeskExchange, *, api_key: str | None) -> Verifier:
+    """Pick the verifier behind ``RF_VERIFY_ENABLED``.
+
+    Unlike the coach factory this one *does* warn when it degrades: an
+    operator who asked for ``voice_agent`` and silently got the simulated
+    verifier would be demoing a conversation that never happens. The
+    simulated fallback still labels every result, so the console stays honest
+    either way.
+    """
+    if cfg.verify_agent != "voice_agent":
+        return SimulatedVerifier()
+    if not api_key:
+        log.warning(
+            "RF_VERIFY_AGENT=voice_agent but ASSEMBLYAI_API_KEY is unset - verification stays simulated"
+        )
+        return SimulatedVerifier()
+    if cfg.dry_run:
+        # The session guard would refuse every conversation (invariant #4), so
+        # every verification would fail. Say so once, here, instead.
+        log.warning(
+            "RF_VERIFY_AGENT=voice_agent under RF_DRY_RUN=true - verification stays simulated"
+        )
+        return SimulatedVerifier()
+    from websockets.asyncio.client import connect
+
+    async def dial(url: str, *, additional_headers: dict[str, str]) -> AgentSocket:
+        return await connect(url, additional_headers=additional_headers, open_timeout=10)
+
+    session = VoiceAgentSession(api_key=api_key, connect=dial, dry_run=cfg.dry_run)
+    return VoiceAgentVerifier(session=session, exchange=exchange)
 
 
 def _bearer(header: str | None) -> str | None:
@@ -405,6 +441,7 @@ def create_app(
     guardian_dispatcher: GuardianDispatcher | None = None,
     intervene_dispatcher: InterventionDispatcher | None = None,
     verify_dispatcher: VerificationDispatcher | None = None,
+    desk_exchange: DeskExchange | None = None,
     session_secret: str | None = None,
     tenants: TenantRegistry | None = None,
     quota_per_tenant: int | None = None,
@@ -1452,6 +1489,11 @@ def create_app(
         *build_org_routes(the_identity, the_secret, billing=the_billing_store),
         WebSocketRoute("/ws/capture", capture),
     ]
+    # the verification desk (apps/gateway/verify_desk.py): only when
+    # verification is on, and before the static catch-all below
+    the_exchange = desk_exchange or DeskExchange()
+    if desk_exchange is not None or get_settings().verify_enabled:
+        routes.extend(build_verify_desk_routes(the_exchange))
     console = Path(__file__).resolve().parents[1] / "console"
     if console.is_dir():
         routes.append(Mount("/", app=StaticFiles(directory=console, html=True)))
@@ -1476,11 +1518,12 @@ def create_app(
         the_pack, the_bus, coach=the_coach
     )
     # verification agent (packages/verify): INTERVENE plus a caller-named
-    # institution -> go and check. Off unless RF_VERIFY_ENABLED. The Phase 1
-    # verifier is simulated and every result it produces is labelled as such;
-    # the real Voice Agent session lands in Phase 2 behind the same seam.
+    # institution -> go and check. Off unless RF_VERIFY_ENABLED; simulated
+    # (and labelled so) unless RF_VERIFY_AGENT=voice_agent.
     verify_live = verify_dispatcher or VerificationDispatcher(
-        the_bus, verifier=SimulatedVerifier(), enabled=cfg.verify_enabled
+        the_bus,
+        verifier=_default_verifier(cfg, the_exchange, api_key=_read_env_key("ASSEMBLYAI_API_KEY")),
+        enabled=cfg.verify_enabled,
     )
     # call ledger: watch rf.*.decision, append the escalation graph
     recorder = CallLedgerRecorder(the_ledger)
@@ -1534,4 +1577,5 @@ def create_app(
     app.state.guardian = guardian
     app.state.intervene_live = intervene_live
     app.state.verify_live = verify_live
+    app.state.desk_exchange = the_exchange
     return app

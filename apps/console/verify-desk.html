@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RingFence · Verification desk</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0a0c0f; --panel: #12151b; --raised: #1a1f27; --border: #252b35;
+        --t0: #eef0f3; --t1: #aab0bb; --t2: #6a7280;
+        --accent: #3dd4e0; --accent-ink: #04222a;
+        --calm: #43b581; --watch: #e0b23c; --intervene: #e94b40;
+        --caller: #e09a5f; --callee: #63a8e0;
+        --mono: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--t0);
+        font: 14px/1.55 system-ui, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+      button { font: inherit; cursor: pointer; }
+      :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+      .wrap { max-width: 640px; margin: 0 auto; padding: 40px 16px 64px; }
+      .lbl { font-family: var(--mono); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--t2); }
+      h1 { font-size: 22px; font-weight: 600; margin: 6px 0 8px; }
+      .sub { color: var(--t1); margin: 0 0 24px; }
+      .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+      .card .sub { color: var(--t2); margin: 6px 0 12px; }
+      .who { font-size: 20px; font-weight: 600; margin: 8px 0 0; min-height: 1.4em; }
+      .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+      .actions:empty { display: none; }
+      button { background: var(--raised); color: var(--t0); border: 1px solid var(--border); border-radius: 8px; padding: 8px 16px; }
+      button:hover { border-color: var(--t2); }
+      button.primary { background: var(--calm); border-color: var(--calm); color: #04140c; font-weight: 600; }
+      button.danger { background: var(--intervene); border-color: var(--intervene); color: #fff; font-weight: 600; }
+      .card[data-state="ringing"] { border-color: var(--watch); animation: ring 1.1s ease-in-out infinite; }
+      .card[data-state="connected"] { border-color: var(--calm); }
+      .card[data-state="ringing"] #state { color: var(--watch); }
+      .card[data-state="connected"] #state { color: var(--calm); }
+      @keyframes ring { 50% { box-shadow: 0 0 0 6px #e0b23c22; } }
+      @media (prefers-reduced-motion: reduce) { .card[data-state="ringing"] { animation: none; } }
+      .transcript { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; }
+      .transcript:empty { display: none; }
+      .transcript li { background: var(--raised); border-radius: 8px; padding: 8px 12px; }
+      .transcript .role { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
+      .transcript li.agent .role { color: var(--caller); }
+      .transcript li.desk .role { color: var(--callee); }
+      .mono { font-family: var(--mono); font-size: 12px; color: var(--t2); }
+      .foot { margin-top: 24px; }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <div class="lbl">RingFence · demo</div>
+      <h1>Verification desk</h1>
+      <p class="sub">
+        This page plays an institution's fraud desk. When RingFence's verification agent calls,
+        answer and reply the way that desk would &mdash; for example, &ldquo;No, we have no record of
+        calling that customer.&rdquo; The call runs over this page; no phone number is involved.
+      </p>
+
+      <section id="card" class="card" data-state="idle" aria-live="polite">
+        <div class="lbl" id="state">Waiting for a verification call</div>
+        <div id="who" class="who"></div>
+        <div class="actions">
+          <button id="answer" class="primary" hidden>Answer</button>
+          <button id="decline" hidden>Decline</button>
+          <button id="hangup" class="danger" hidden>Hang up</button>
+        </div>
+        <ol id="transcript" class="transcript"></ol>
+      </section>
+
+      <section class="card">
+        <div class="lbl">Audio check</div>
+        <p class="sub">
+          Hear your own microphone back through this page, with no agent and no cost. Use headphones,
+          or the agent will hear itself through your speakers during a real call.
+        </p>
+        <div class="actions">
+          <button id="echo">Start echo test</button>
+          <span id="echo-status" class="mono"></span>
+        </div>
+      </section>
+
+      <p id="conn" class="mono foot">connecting…</p>
+    </main>
+    <script type="module" src="/verify-desk.js"></script>
+  </body>
+</html>

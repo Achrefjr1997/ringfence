@@ -366,3 +366,37 @@ async def test_an_amount_only_in_unattributed_speech_is_never_passed_on() -> Non
     await d.on_turn("rf.acme.turn", _turn("is it the 500 dollars?", role="UNKNOWN"))
     await d.on_decision("rf.acme.decision", _decision())
     assert [i.id for i in verifier.calls] == ["amazon"] and verifier.amounts == [None]
+
+
+async def test_the_bus_loop_keeps_consuming_while_a_verification_is_in_flight() -> None:
+    """A live verification lasts tens of seconds. The loop must not stall on
+    it: the bus drops the oldest events for a subscriber that falls behind,
+    and those would be other sessions' turns."""
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    class _SlowVerifier(_StubVerifier):
+        async def verify(self, **kw):  # type: ignore[no-untyped-def]  # noqa: ANN003, ANN201
+            started.set()
+            await release.wait()
+            return await super().verify(**kw)
+
+    bus = InProcessBus()
+    d = _dispatcher(bus, _SlowVerifier())
+    loop = asyncio.create_task(d.run())
+    await asyncio.sleep(0)
+    await bus.publish("rf.acme.turn", _turn("Amazon account security"))
+    await bus.publish("rf.acme.decision", _decision())
+    await asyncio.wait_for(started.wait(), 1.0)
+
+    await bus.publish("rf.acme.turn", _turn("MoneyGram here", session="s2"))
+    for _ in range(50):
+        if "s2" in d._buffer:
+            break
+        await asyncio.sleep(0.01)
+    assert "s2" in d._buffer, "a turn published mid-verification was not consumed"
+
+    release.set()
+    loop.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await loop

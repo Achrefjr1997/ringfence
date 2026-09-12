@@ -25,7 +25,7 @@ import contextlib
 import json
 import secrets
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal, TypeVar
 
@@ -206,7 +206,7 @@ class DeskExchange:
         self._expire()
         return [offer for offer, _ in self._pending.values()]
 
-    async def notices(self) -> AsyncIterator[DeskNotice]:
+    async def notices(self) -> AsyncGenerator[DeskNotice, None]:
         """Offers as they ring and stop ringing, starting with those already
         waiting -- a desk page opened mid-ring still sees the call."""
         queue: asyncio.Queue[DeskNotice] = asyncio.Queue(_SUBSCRIBER_QUEUE)
