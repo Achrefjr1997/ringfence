@@ -119,6 +119,82 @@ async def test_missing_language_on_the_event_falls_back_to_english() -> None:
     assert warning is not None and warning.language == "en"
 
 
+class _StubCoach:
+    def __init__(self, reply: str | None) -> None:
+        self.reply = reply
+        self.requests: list[object] = []
+
+    async def suggest(self, request: object):  # noqa: ANN201
+        self.requests.append(request)
+        return self.reply
+
+
+async def test_a_coach_publishes_a_second_richer_warning() -> None:
+    bus = InProcessBus()
+    coach = _StubCoach("Ask for a callback number and hang up now.")
+    d = InterventionDispatcher(PACK, bus, dry_run=False, coach=coach)
+
+    seen = []
+
+    async def _watch() -> None:
+        async for _subject, payload in bus.subscribe("rf.acme.warning"):
+            seen.append(payload)
+            if len(seen) == 2:
+                return
+
+    task = asyncio.create_task(_watch())
+    await asyncio.sleep(0)
+    await d.dispatch("acme", _event())
+    await asyncio.wait_for(task, timeout=1.0)
+
+    assert seen[0]["template_id"] != "LLM_COACH"  # the static one, first
+    assert seen[1]["template_id"] == "LLM_COACH"
+    assert seen[1]["text"] == "Ask for a callback number and hang up now."
+    assert seen[1]["session_id"] == seen[0]["session_id"] == "s1"
+
+
+async def test_the_coach_sees_every_active_caller_signal_not_just_one() -> None:
+    bus = InProcessBus()
+    coach = _StubCoach("combined sentence")
+    d = InterventionDispatcher(PACK, bus, dry_run=False, coach=coach)
+    await d.dispatch("acme", _event())
+
+    request = coach.requests[0]
+    ids = [sid for sid, _copy in request.signals]  # type: ignore[attr-defined]
+    assert "AUTH_CLAIM" in ids and "VERIF_INVERT" in ids  # not just the top-weighted one
+
+
+async def test_a_coach_miss_leaves_only_the_static_warning() -> None:
+    bus = InProcessBus()
+    coach = _StubCoach(None)  # timeout / malformed / caller error, all the same to us
+    d = InterventionDispatcher(PACK, bus, dry_run=False, coach=coach)
+
+    seen = []
+
+    async def _watch() -> None:
+        async for _subject, payload in bus.subscribe("rf.acme.warning"):
+            seen.append(payload)
+
+    task = asyncio.create_task(_watch())
+    await asyncio.sleep(0)
+    await d.dispatch("acme", _event())
+    await asyncio.sleep(0.02)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert len(seen) == 1
+    assert seen[0]["template_id"] != "LLM_COACH"
+
+
+async def test_no_coach_configured_behaves_exactly_as_before() -> None:
+    """Regression guard: the coach is entirely optional."""
+    bus = InProcessBus()
+    d = InterventionDispatcher(PACK, bus, dry_run=False)  # no coach=
+    warning = await d.dispatch("acme", _event())
+    assert warning is not None and warning.delivered
+
+
 async def test_run_consumes_the_bus_and_ignores_non_intervene_and_replay() -> None:
     bus = InProcessBus()
     d = InterventionDispatcher(PACK, bus, dry_run=False)
