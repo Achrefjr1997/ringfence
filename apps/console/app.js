@@ -49,6 +49,24 @@ export function mountConsole(sessionId, els, query = "") {
     drawTimeline();
   });
 
+  es.addEventListener("warning", (e) => {
+    const d = JSON.parse(e.data);
+    if (!els.coach) return;
+    els.coach.textContent = d.text;
+    els.coach.classList.add("live");
+    // The static template publishes first, instantly; if an LLM coach is
+    // configured (packages/intervene/coach.py) a richer sentence reasoning
+    // over every active signal follows a moment later as a second warning
+    // event with this template_id -- tag it so the refinement is visible,
+    // not just felt.
+    if (d.template_id === "LLM_COACH") {
+      const src = document.createElement("span");
+      src.className = "src";
+      src.textContent = "agent";
+      els.coach.append(src);
+    }
+  });
+
   es.addEventListener("end", () => {
     es.close();
     status && (status.textContent = "session ended");
