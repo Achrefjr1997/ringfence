@@ -274,6 +274,15 @@ class Pipeline:
                             # pick the right warning copy and has no other
                             # way to see it (it only sees the bus event).
                             "language": self._language,
+                            # Without this a fixture replayed into a real
+                            # tenant is indistinguishable from a live call on
+                            # the bus, and a consumer that ACTS on INTERVENE
+                            # (the verification agent opens a paid, real
+                            # conversation with a third party) has no way to
+                            # know it must not. Filtering on the tenant string
+                            # "replay" is not enough -- /replay takes any
+                            # tenant. See invariant #4.
+                            "mode": self._desc.mode.value,
                             "contributions": [
                                 {
                                     "source": c.source,
