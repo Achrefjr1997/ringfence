@@ -672,16 +672,26 @@ def create_app(
         return JSONResponse(out)
 
     def case_access(request: Request) -> tuple[User | None, JSONResponse | None]:
-        """``(user, error)``.  In ``dev_mode`` returns ``(None, None)`` — no
-        auth, every case visible (the current local/demo behaviour)."""
+        """``(user, error)``.
+
+        A real session, when one is presented, always wins -- an admin
+        logged into the console must see their own org's calls and cases,
+        dev_mode or not.  ``dev_mode``'s permissive fallback (``(None,
+        None)``, every case visible) is for when *no* session is presented
+        at all -- a bare request in a pure local/demo setup -- not a
+        substitute for checking the session that is actually there.
+        ``authenticate`` returns ``None`` for both "no token" and "bad
+        token", so both fall through to the same dev_mode fallback rather
+        than a hard 401.
+        """
+        user = authenticate(request, the_identity, the_secret)
+        if user is not None:
+            if user.role not in _CASE_ROLES:
+                return None, JSONResponse({"error": "forbidden"}, status_code=403)
+            return user, None
         if dev_mode:
             return None, None
-        user = authenticate(request, the_identity, the_secret)
-        if user is None:
-            return None, JSONResponse({"error": "unauthenticated"}, status_code=401)
-        if user.role not in _CASE_ROLES:
-            return None, JSONResponse({"error": "forbidden"}, status_code=403)
-        return user, None
+        return None, JSONResponse({"error": "unauthenticated"}, status_code=401)
 
     async def list_cases(request: Request) -> JSONResponse:
         user, err = case_access(request)
