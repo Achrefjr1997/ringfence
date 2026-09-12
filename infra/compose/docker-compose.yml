@@ -46,6 +46,9 @@ services:
       RF_ASR_PROVIDER: ${RF_ASR_PROVIDER:-null} # null | assemblyai
       ASSEMBLYAI_API_KEY: ${ASSEMBLYAI_API_KEY:-}
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+      # verification agent (packages/verify): off unless set. Phase 1 is
+      # simulated and labels every result as such on the console.
+      RF_VERIFY_ENABLED: ${RF_VERIFY_ENABLED:-false}
     ports: ["8000:8000"]
     depends_on: [nats, redis, postgres]
 

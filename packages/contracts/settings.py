@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # first is used to encrypt, all are tried to decrypt (rotation). Unset =>
     # sensitive columns are stored in clear (dev only).
     data_encryption_key: str | None = None
+    # Verification agent (packages/verify). Off unless deliberately enabled:
+    # when on, an INTERVENE whose caller named an institution in
+    # config/verify/directory.yaml opens a verification.
+    verify_enabled: bool = False
 
 
 @lru_cache

@@ -65,6 +65,25 @@ export function mountConsole(sessionId, els, query = "") {
       src.textContent = "agent";
       els.coach.append(src);
     }
+    // A simulated verification (packages/verify/simulated.py) produces a
+    // result nobody actually obtained. Say so on screen, every time.
+    if (d.simulated) {
+      const sim = document.createElement("span");
+      sim.className = "src";
+      sim.textContent = "simulated";
+      els.coach.append(sim);
+    }
+  });
+
+  // Verification agent progress (packages/verify). Only "dialing" needs its
+  // own rendering -- the outcome arrives as a warning event above, already
+  // translated. "skipped" stays off the banner on purpose: it is operator
+  // information, not something the person on the call needs to read.
+  es.addEventListener("verification", (e) => {
+    const d = JSON.parse(e.data);
+    if (!els.coach || d.stage !== "dialing") return;
+    els.coach.textContent = `Verifying with ${d.institution_display}…`;
+    els.coach.classList.add("live");
   });
 
   es.addEventListener("end", () => {

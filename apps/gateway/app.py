@@ -39,6 +39,7 @@ from apps.gateway.auth import authenticate, build_auth_routes, read_json_body
 from apps.gateway.call_recorder import CallLedgerRecorder, TranscriptRecorder
 from apps.gateway.guardian import GuardianDispatcher
 from apps.gateway.intervene_dispatch import InterventionDispatcher
+from apps.gateway.verify_dispatch import VerificationDispatcher
 from apps.gateway.orgs import build_org_routes
 from apps.gateway.ratelimit import RateLimiter, RateLimitMiddleware
 from apps.gateway.tokens import read_token
@@ -77,6 +78,7 @@ from packages.intervene.coach import CoachGenerator
 from packages.risk.judge import Judge
 from packages.session.manager import SessionManager
 from packages.storage.objectstore import LocalFsObjectStore, ObjectStore
+from packages.verify.simulated import SimulatedVerifier
 
 log = logging.getLogger("ringfence.gateway")
 
@@ -375,6 +377,8 @@ async def session_events(
             yield {"event": "turn", "data": json.dumps(payload)}
         elif subject.endswith(".warning"):
             yield {"event": "warning", "data": json.dumps(payload)}
+        elif subject.endswith(".verification"):
+            yield {"event": "verification", "data": json.dumps(payload)}
         elif subject.endswith(".session.closed"):
             yield {"event": "end", "data": json.dumps(payload)}
             if close_deadline is None:
@@ -400,6 +404,7 @@ def create_app(
     asr: ASRProvider | None = None,
     guardian_dispatcher: GuardianDispatcher | None = None,
     intervene_dispatcher: InterventionDispatcher | None = None,
+    verify_dispatcher: VerificationDispatcher | None = None,
     session_secret: str | None = None,
     tenants: TenantRegistry | None = None,
     quota_per_tenant: int | None = None,
@@ -695,6 +700,8 @@ def create_app(
                     yield {"event": "turn", "data": json.dumps(payload)}
                 elif subject.endswith(".warning"):
                     yield {"event": "warning", "data": json.dumps(payload)}
+                elif subject.endswith(".verification"):
+                    yield {"event": "verification", "data": json.dumps(payload)}
                 elif subject.endswith(".session.closed"):
                     yield {"event": "end", "data": json.dumps(payload)}
                 if await request.is_disconnected():
@@ -1468,6 +1475,13 @@ def create_app(
     intervene_live = intervene_dispatcher or InterventionDispatcher(
         the_pack, the_bus, coach=the_coach
     )
+    # verification agent (packages/verify): INTERVENE plus a caller-named
+    # institution -> go and check. Off unless RF_VERIFY_ENABLED. The Phase 1
+    # verifier is simulated and every result it produces is labelled as such;
+    # the real Voice Agent session lands in Phase 2 behind the same seam.
+    verify_live = verify_dispatcher or VerificationDispatcher(
+        the_bus, verifier=SimulatedVerifier(), enabled=cfg.verify_enabled
+    )
     # call ledger: watch rf.*.decision, append the escalation graph
     recorder = CallLedgerRecorder(the_ledger)
     # per-call transcript: buffer rf.*.turn, flush on close (RF_RETAIN_TRANSCRIPTS)
@@ -1487,6 +1501,7 @@ def create_app(
         tasks = [
             asyncio.create_task(guardian.run(the_bus)),
             asyncio.create_task(intervene_live.run()),
+            asyncio.create_task(verify_live.run()),
             asyncio.create_task(recorder.run(the_bus)),
             asyncio.create_task(transcriber.run(the_bus)),
             asyncio.create_task(_audio_retention_sweep()),
@@ -1518,4 +1533,5 @@ def create_app(
     app.state.asr_router = the_router
     app.state.guardian = guardian
     app.state.intervene_live = intervene_live
+    app.state.verify_live = verify_live
     return app
