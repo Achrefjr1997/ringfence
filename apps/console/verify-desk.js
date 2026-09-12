@@ -98,9 +98,12 @@ async function openAudio(url, { onOpen, onEvent, onClose }) {
     opened = true;
     onOpen && onOpen();
   };
-  ws.onclose = () => {
+  ws.onclose = (ev) => {
+    // Kept in the console so a dropped call can be diagnosed: 1000 is a
+    // normal close, 1006 means the connection died without a close frame.
+    console.info(`[verify-desk] socket closed code=${ev.code} reason=${ev.reason || "-"} url=${url.split("?")[0]}`);
     close({ drain: true });
-    onClose && onClose(opened);
+    onClose && onClose(opened, ev);
   };
   return { close };
 }
@@ -162,10 +165,15 @@ const VERDICT = {
 async function answer() {
   const offer = ringing;
   if (!offer || call) return;
+  // The echo test plays the microphone back through the speakers. Left
+  // running, the agent hears its own voice and yours mixed together (seen
+  // live: the desk's words came back garbled, then the call dropped).
+  if (echo) echo.close();
   ringing = null;
   stopRing();
   show("connecting", "Connecting…");
   let verdict = null;
+  hungUp = false;
   try {
     call = await openAudio(`${WS}/ws/verify-desk/${encodeURIComponent(offer.ticket)}${Q}`, {
       onOpen: () => show("connected", "On a verification call"),
@@ -173,10 +181,12 @@ async function answer() {
         if (m.type === "transcript") addLine(m.role, m.text, offer);
         else if (m.type === "ended") verdict = m.verified;
       },
-      onClose: (opened) => {
+      onClose: (opened, ev) => {
         call = null;
         if (!opened) idle("That call is no longer available");
-        else idle(VERDICT[verdict] || "Call ended");
+        else if (verdict) idle(VERDICT[verdict] || "Call ended");
+        else if (hungUp) idle("You hung up before answering");
+        else idle(`Call dropped before an answer (connection code ${ev.code})`);
       },
     });
   } catch (err) {
@@ -185,18 +195,26 @@ async function answer() {
   }
 }
 
+let hungUp = false;
 els.answer.addEventListener("click", answer);
 els.decline.addEventListener("click", () => {
   if (ringing) declined.add(ringing.ticket);
   idle("Declined");
 });
-els.hangup.addEventListener("click", () => call && call.close());
+els.hangup.addEventListener("click", () => {
+  hungUp = true;
+  if (call) call.close();
+});
 
 // -- echo test --------------------------------------------------------------
 
 els.echo.addEventListener("click", async () => {
   if (echo) {
     echo.close();
+    return;
+  }
+  if (call) {
+    els.echoStatus.textContent = "not during a call";
     return;
   }
   els.echoStatus.textContent = "starting…";

@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import secrets
 import time
 from collections.abc import AsyncIterator
@@ -41,6 +42,8 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from packages.verify.desk import DeskExchange, DeskLine
 
+log = logging.getLogger("ringfence.verify")
+
 _PAGE = Path(__file__).resolve().parents[1] / "console" / "verify-desk.html"
 # One desk frame is 50 ms of 24 kHz PCM16: 2,400 bytes. Anything far larger
 # did not come from our page, and is not forwarded to a paid session.
@@ -51,27 +54,37 @@ UNAUTHORISED_CODE = 4401
 
 
 async def bridge(ws: WebSocket, line: DeskLine) -> None:
-    """Pump one accepted desk socket against its line until either side ends."""
+    """Pump one accepted desk socket against its line until either side ends.
 
-    async def down() -> None:
+    Logs which side ended it. A desk hang-up and a dropped connection both
+    reach the agent as ``desk_hangup``, and only this line tells them apart
+    (the browser's close code: 1000/1001 normal, 1006 died without a close).
+    """
+
+    async def down() -> str:
         while (item := await line.next_outbound()) is not None:
             if isinstance(item, bytes):
                 await ws.send_bytes(item)
             else:
                 await ws.send_text(item)
+        return "agent finished"
 
-    async def up() -> None:
+    async def up() -> str:
         while True:
             message = await ws.receive()
             if message["type"] == "websocket.disconnect":
-                return
+                return f"desk disconnected (code {message.get('code')})"
             data = message.get("bytes")
             if isinstance(data, bytes) and 0 < len(data) <= _MAX_FRAME_BYTES:
                 line.push_audio(data[: len(data) - len(data) % 2])
 
     tasks = [asyncio.create_task(down()), asyncio.create_task(up())]
     try:
-        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            exc = task.exception()
+            ended = f"error {type(exc).__name__}: {exc}" if exc else task.result()
+            log.info("verification desk line ended: %s", ended)
     finally:
         line.hang_up()
         for task in tasks:
