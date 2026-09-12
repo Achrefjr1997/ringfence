@@ -73,6 +73,7 @@ from packages.pipeline.pipeline import Pipeline
 from packages.policy.pack import PolicyPack, load_pack
 from packages.media.vad import VoiceActivityDetector
 from packages.policy.tenants import TenantRegistry, resolve_language, load_tenants, tenant_pattern
+from packages.intervene.coach import CoachGenerator
 from packages.risk.judge import Judge
 from packages.session.manager import SessionManager
 from packages.storage.objectstore import LocalFsObjectStore, ObjectStore
@@ -173,6 +174,32 @@ def _default_judge_factory() -> JudgeFactory:
             kb = None
         timeout_s = float(os.environ.get("RF_JUDGE_TIMEOUT_S", str(_JUDGE_DEFAULT_TIMEOUT_S)))
         return BoundedJudge(caller, model=pack.judge.model, timeout_s=timeout_s, kb=kb)
+
+    return factory
+
+
+def _default_coach_factory() -> Callable[[PolicyPack], CoachGenerator | None]:
+    """Build the live-coaching LLM from the pack + ``OLLAMA_API_KEY``.
+
+    Deliberately silent (no ``log.warning``) when unavailable, unlike the
+    judge factory above: the coach is a pure enhancement over the static
+    template, which is already live and correct by the time this would
+    fire, so an operator running without an Ollama key has nothing to fix.
+    """
+
+    def factory(pack: PolicyPack) -> CoachGenerator | None:
+        key = _read_env_key("OLLAMA_API_KEY")
+        if not key:
+            return None
+        from packages.risk.ollama_judge import OllamaCaller
+
+        try:
+            caller = OllamaCaller(api_key=key)
+        except RuntimeError:  # 'judge' extra missing
+            return None
+        from packages.intervene.coach import LLMCoach
+
+        return LLMCoach(caller, model=pack.judge.model)
 
     return factory
 
@@ -308,6 +335,7 @@ def create_app(
     *,
     provider_factory: ProviderFactory | None = None,
     judge_factory: JudgeFactory | None = None,
+    coach_factory: Callable[[PolicyPack], CoachGenerator | None] | None = None,
     pack: PolicyPack | None = None,
     bus: EventBus | None = None,
     case_store: CaseStore | None = None,
@@ -1395,8 +1423,9 @@ def create_app(
     # the protected person's own view (console Live tab) -- see
     # apps/gateway/intervene_dispatch.py for why this is a separate
     # dispatcher rather than reusing guardian's.
+    the_coach = (coach_factory or _default_coach_factory())(the_pack)
     intervene_live = intervene_dispatcher or InterventionDispatcher(
-        the_pack, the_bus, dry_run=cfg.dry_run
+        the_pack, the_bus, dry_run=cfg.dry_run, coach=the_coach
     )
     # call ledger: watch rf.*.decision, append the escalation graph
     recorder = CallLedgerRecorder(the_ledger)
