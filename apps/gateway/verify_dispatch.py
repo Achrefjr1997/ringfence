@@ -190,6 +190,7 @@ class VerificationDispatcher:
                 "template_id": template_id,
                 "language": language,
                 "text": text.replace("{institution}", institution.display_name),
+                "simulated": outcome.simulated,
             },
         )
 
@@ -216,6 +217,7 @@ class VerificationDispatcher:
             "verified": outcome.verified if outcome else None,
             "confidence": outcome.confidence if outcome else None,
             "detail": outcome.reason if outcome else None,
+            "simulated": outcome.simulated if outcome else False,
         }
         await self._bus.publish(f"rf.{tenant}.verification", payload)
 

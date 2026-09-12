@@ -38,3 +38,7 @@ class VerificationOutcome:
     confidence: Literal["high", "low"] | None = None
     duration_s: float = 0.0
     error: str | None = None
+    # True when no conversation took place (Phase 1's SimulatedVerifier). The
+    # console labels such results; a banner claiming "We called Amazon" must
+    # never appear unmarked when nobody called anyone.
+    simulated: bool = False
