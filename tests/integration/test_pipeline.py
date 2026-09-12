@@ -142,3 +142,10 @@ async def test_decisions_are_published_on_the_bus() -> None:
     assert len(got) == len(result.decisions) >= 1
     assert {p["state"] for _, p in got} <= {"WATCH", "ALERT", "INTERVENE"}
     assert any(p["state"] == "ALERT" for _, p in got)
+    # Every decision carries the session's mode. Without it a fixture
+    # replayed into a real tenant is indistinguishable on the bus from a
+    # live call, and a consumer that acts on INTERVENE -- the verification
+    # agent opens a paid conversation with a third party -- cannot tell that
+    # it must not act. The tenant string alone is not enough: this session's
+    # tenant is "acme", not "replay".
+    assert {p["mode"] for _, p in got} == {"replay"}
