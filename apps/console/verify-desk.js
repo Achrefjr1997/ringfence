@@ -10,6 +10,10 @@
 
 const RATE = 24000;
 const WS = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
+// RF_VERIFY_DESK_TOKEN, when the gateway sets one: open this page as
+// /verify-desk?token=... and it is forwarded to every desk endpoint.
+const TOKEN = new URLSearchParams(location.search).get("token");
+const Q = TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : "";
 const $ = (id) => document.getElementById(id);
 const els = {
   card: $("card"),
@@ -163,7 +167,7 @@ async function answer() {
   show("connecting", "Connecting…");
   let verdict = null;
   try {
-    call = await openAudio(`${WS}/ws/verify-desk/${encodeURIComponent(offer.ticket)}`, {
+    call = await openAudio(`${WS}/ws/verify-desk/${encodeURIComponent(offer.ticket)}${Q}`, {
       onOpen: () => show("connected", "On a verification call"),
       onEvent: (m) => {
         if (m.type === "transcript") addLine(m.role, m.text, offer);
@@ -197,7 +201,7 @@ els.echo.addEventListener("click", async () => {
   }
   els.echoStatus.textContent = "starting…";
   try {
-    echo = await openAudio(`${WS}/ws/verify-desk/echo`, {
+    echo = await openAudio(`${WS}/ws/verify-desk/echo${Q}`, {
       onOpen: () => {
         els.echo.textContent = "Stop echo test";
         els.echoStatus.textContent = "speak — you should hear yourself";
@@ -216,10 +220,12 @@ els.echo.addEventListener("click", async () => {
 
 // -- offers -----------------------------------------------------------------
 
-const offers = new EventSource("/verify-desk/offers");
+const offers = new EventSource(`/verify-desk/offers${Q}`);
 offers.onopen = () => (els.conn.textContent = "desk online");
 offers.onerror = () =>
-  (els.conn.textContent = "desk offline — is verification enabled on the gateway? retrying…");
+  (els.conn.textContent = TOKEN
+    ? "desk offline — wrong desk token, or verification is off. retrying…"
+    : "desk offline — is verification enabled (and a desk token required)? retrying…");
 offers.addEventListener("offer", (e) => {
   const offer = JSON.parse(e.data);
   if (!call && !ringing && !declined.has(offer.ticket)) ring(offer);

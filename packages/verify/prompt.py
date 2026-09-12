@@ -45,6 +45,8 @@ def build_prompt(institution: Institution, amount: str | None) -> tuple[str, str
         f"Rules:\n"
         f"- Ask one clear question. Be brief and polite; the whole exchange should take "
         f"under half a minute.\n"
+        f"- If they have already answered before you ask, do not ask again: report "
+        f"what they said.\n"
         f"- {about_money}\n"
         f"- You know nothing about the customer. Never ask for or offer personal "
         f"details, account information, or codes.\n"

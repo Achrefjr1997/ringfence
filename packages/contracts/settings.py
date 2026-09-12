@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     # AssemblyAI Voice Agent session to the /verify-desk page -- it needs
     # ASSEMBLYAI_API_KEY and RF_DRY_RUN=false, and costs per minute.
     verify_agent: Literal["simulated", "voice_agent"] = "simulated"
+    # Shared secret for the /verify-desk endpoints (?token=). Unset => open,
+    # which is fine on localhost and wrong on any public URL: whoever holds
+    # the desk can answer, and so steer, the verification.
+    verify_desk_token: str | None = None
 
 
 @lru_cache

@@ -664,6 +664,7 @@ def create_app(
                 active_by_tenant=dict(by_tenant),
                 asr_breakers=the_router.breaker_states() if the_router is not None else {},
                 judge=getattr(the_judge, "stats", None),
+                verify=verify_live.stats if verify_live.enabled else None,
             )
         )
         return PlainTextResponse(body, media_type="text/plain; version=0.0.4")
@@ -1493,7 +1494,9 @@ def create_app(
     # verification is on, and before the static catch-all below
     the_exchange = desk_exchange or DeskExchange()
     if desk_exchange is not None or get_settings().verify_enabled:
-        routes.extend(build_verify_desk_routes(the_exchange))
+        routes.extend(
+            build_verify_desk_routes(the_exchange, token=get_settings().verify_desk_token)
+        )
     console = Path(__file__).resolve().parents[1] / "console"
     if console.is_dir():
         routes.append(Mount("/", app=StaticFiles(directory=console, html=True)))

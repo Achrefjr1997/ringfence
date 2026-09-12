@@ -14,10 +14,13 @@ Starlette. Four routes, registered only when verification is enabled:
   speaker, no agent and no cost, time-limited. It exists to prove the
   browser's 24 kHz audio path on its own before any agent is in the loop.
 
-Demo scope: the desk is a page we serve ourselves, reachable by anyone who can
-reach the gateway. The ticket is what stops a stranger joining a call already
-in progress; the budget in ``packages/verify/budget.py`` is what bounds how
-many conversations can exist at all.
+Access: whoever answers the desk decides what the agent is told, and so what
+verdict the protected person sees. On localhost that is the operator. On any
+public URL set ``RF_VERIFY_DESK_TOKEN``: then every desk endpoint except the
+static page requires ``?token=``, checked in constant time, and a wrong token
+is refused *before* a ticket is redeemed -- so it cannot burn a real ticket.
+The budget in ``packages/verify/budget.py`` bounds how many conversations can
+exist at all.
 """
 
 from __future__ import annotations
@@ -25,12 +28,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import secrets
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 
 from sse_starlette.sse import EventSourceResponse
-from starlette.requests import Request
+from starlette.requests import HTTPConnection, Request
 from starlette.responses import FileResponse, PlainTextResponse, Response
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
@@ -43,6 +47,7 @@ _PAGE = Path(__file__).resolve().parents[1] / "console" / "verify-desk.html"
 _MAX_FRAME_BYTES = 16_000
 _ECHO_LIMIT_S = 60.0
 REJECT_CODE = 4404
+UNAUTHORISED_CODE = 4401
 
 
 async def bridge(ws: WebSocket, line: DeskLine) -> None:
@@ -78,13 +83,24 @@ async def bridge(ws: WebSocket, line: DeskLine) -> None:
             await ws.close()
 
 
-def build_verify_desk_routes(exchange: DeskExchange) -> list[Route | WebSocketRoute]:
+def build_verify_desk_routes(
+    exchange: DeskExchange, *, token: str | None = None
+) -> list[Route | WebSocketRoute]:
+    def authorised(conn: HTTPConnection) -> bool:
+        if not token:
+            return True
+        offered = conn.query_params.get("token", "")
+        return secrets.compare_digest(offered.encode(), token.encode())
+
     async def page(_: Request) -> Response:
         if not _PAGE.is_file():
             return PlainTextResponse("verification desk page missing", status_code=404)
         return FileResponse(_PAGE, media_type="text/html")
 
-    async def offers(_: Request) -> EventSourceResponse:
+    async def offers(request: Request) -> Response:
+        if not authorised(request):
+            return PlainTextResponse("desk token required", status_code=401)
+
         async def stream() -> AsyncIterator[dict[str, str]]:
             async with contextlib.aclosing(exchange.notices()) as notices:
                 async for kind, offer in notices:
@@ -93,6 +109,10 @@ def build_verify_desk_routes(exchange: DeskExchange) -> list[Route | WebSocketRo
         return EventSourceResponse(stream())
 
     async def line_ws(ws: WebSocket) -> None:
+        if not authorised(ws):
+            # before redeem: a wrong token must not consume someone's ticket
+            await ws.close(code=UNAUTHORISED_CODE)
+            return
         line = exchange.redeem(str(ws.path_params["ticket"]))
         if line is None:
             await ws.close(code=REJECT_CODE)  # before accept: the handshake fails
@@ -101,6 +121,9 @@ def build_verify_desk_routes(exchange: DeskExchange) -> list[Route | WebSocketRo
         await bridge(ws, line)
 
     async def echo_ws(ws: WebSocket) -> None:
+        if not authorised(ws):
+            await ws.close(code=UNAUTHORISED_CODE)
+            return
         await ws.accept()
         deadline = time.monotonic() + _ECHO_LIMIT_S
         with contextlib.suppress(TimeoutError, WebSocketDisconnect, RuntimeError):
