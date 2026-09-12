@@ -75,3 +75,26 @@ templates:
     en: "Hang up and call the number on the back of your card yourself before doing anything."
     fr: "Raccrochez et rappelez le numero au dos de votre carte vous-meme avant de faire quoi que ce soit."
     ar_tn: "اقطع الخط واتصل بالرقم اللي في ضهر بطاقتك بروحك قبل ما تعمل حتى حاجة."
+
+  # Verification-agent outcomes. `{institution}` is substituted at publish
+  # time. These are not signal ids -- load_templates() only requires that
+  # every KNOWN_SIGNAL_ID is present, so extra entries are legal, and reusing
+  # this file means the outcome renders in every language the coach already
+  # speaks with no new front-end code.
+  #
+  # CONFIRMED and FAILED are deliberately not the same message. "We could not
+  # reach them" is not "they say they never called you", and showing the
+  # second when we mean the first would turn a dropped connection into an
+  # accusation.
+  VERIFY_CONFIRMED:
+    en: "We reached {institution} and they confirm this call is genuine. Stay careful anyway: never share a code."
+    fr: "Nous avons joint {institution} et cet appel est confirme comme authentique. Restez prudent : ne communiquez jamais de code."
+    ar_tn: "كلمنا {institution} وأكدولنا إلي المكالمة حقيقية. أما ابقى حذر: عمرك ما تعطي كود."
+  VERIFY_UNCONFIRMED:
+    en: "We called {institution} directly. They have no record of this call. Hang up now."
+    fr: "Nous avons contacte {institution} directement. Ils n'ont aucune trace de cet appel. Raccrochez maintenant."
+    ar_tn: "كلمنا {institution} مباشرة. ما عندهم حتى أثر لهذي المكالمة. اقطع الخط توا."
+  VERIFY_FAILED:
+    en: "We could not reach {institution} to check. Hang up and call them yourself on their official number."
+    fr: "Nous n'avons pas pu joindre {institution} pour verifier. Raccrochez et appelez-les vous-meme au numero officiel."
+    ar_tn: "ما نجمناش نكلمو {institution} باش نتثبتو. اقطع الخط واتصل بيهم بروحك على الرقم الرسمي."
