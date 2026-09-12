@@ -60,3 +60,10 @@ def test_the_greeting_needs_no_article_before_the_name() -> None:
     """Heard live: "on behalf of a Amazon customer"."""
     _, greeting = build_prompt(_INST, None)
     assert " a Amazon" not in greeting and "Amazon's customers" in greeting
+
+
+def test_an_answer_given_before_the_question_is_not_asked_for_again() -> None:
+    """Heard live: the desk answered during the greeting, and the agent still
+    asked its question before reporting."""
+    system_prompt, _ = build_prompt(_INST, None)
+    assert "do not ask again" in system_prompt

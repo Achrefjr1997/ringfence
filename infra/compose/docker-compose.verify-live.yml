@@ -19,4 +19,6 @@ services:
       RF_DRY_RUN: "false"
       RF_VERIFY_ENABLED: "true"
       RF_VERIFY_AGENT: voice_agent
+      # set before exposing the gateway on any public URL (docs/VERIFY.md)
+      RF_VERIFY_DESK_TOKEN: ${RF_VERIFY_DESK_TOKEN:-}
       RF_ASR_PROVIDER: ${RF_ASR_PROVIDER:-assemblyai}

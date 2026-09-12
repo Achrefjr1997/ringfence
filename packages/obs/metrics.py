@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from packages.risk.judge import JudgeStats
+from packages.verify.stats import VerificationStats
 
 _PREFIX = "ringfence"
 
@@ -24,6 +25,7 @@ class MetricsSnapshot:
     active_by_tenant: Mapping[str, int] = field(default_factory=dict)
     asr_breakers: Mapping[str, str] = field(default_factory=dict)  # provider -> state
     judge: JudgeStats | None = None  # None when the Tier-2 judge is not configured
+    verify: VerificationStats | None = None  # None when RF_VERIFY_ENABLED is off
 
 
 def _escape(label_value: str) -> str:
@@ -65,6 +67,39 @@ def _judge_blocks(stats: JudgeStats) -> list[str]:
     return out
 
 
+def _verify_blocks(v: VerificationStats) -> list[str]:
+    """Only two of a verification's endings cost money, and they look like
+    the other three from outside -- see packages/verify/stats.py."""
+    out = _block(
+        "verifications_total",
+        "counter",
+        "Verifications that reached the verifier, by outcome.",
+        [
+            f'{{outcome="{_escape(o)}",simulated="{str(sim).lower()}"}} {n}'
+            for (o, sim), n in sorted(v.outcomes.items())
+        ],
+    )
+    out += _block(
+        "verifications_skipped_total",
+        "counter",
+        "INTERVENE decisions that did not verify, by reason.",
+        [f'{{reason="{_escape(r)}"}} {n}' for r, n in sorted(v.skipped.items())],
+    )
+    out += _block(
+        "verification_errors_total",
+        "counter",
+        "Verifications that ended without an answer, by cause.",
+        [f'{{error="{_escape(e)}"}} {n}' for e, n in sorted(v.errors.items())],
+    )
+    out += _block(
+        "verification_agent_seconds_total",
+        "counter",
+        "Real Voice Agent session time in seconds (billed; simulated checks excluded).",
+        [f" {v.agent_seconds:.2f}"],
+    )
+    return out
+
+
 def prometheus_text(snap: MetricsSnapshot) -> str:
     out: list[str] = []
     out += _block(
@@ -102,4 +137,6 @@ def prometheus_text(snap: MetricsSnapshot) -> str:
         )
     if snap.judge is not None:
         out += _judge_blocks(snap.judge)
+    if snap.verify is not None:
+        out += _verify_blocks(snap.verify)
     return "\n".join(out) + "\n"

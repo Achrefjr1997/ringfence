@@ -15,7 +15,7 @@ from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from apps.gateway.app import _default_verifier, create_app
-from apps.gateway.verify_desk import REJECT_CODE
+from apps.gateway.verify_desk import REJECT_CODE, UNAUTHORISED_CODE
 from packages.asr.null import NullASR
 from packages.contracts.settings import Settings
 from packages.verify.desk import DeskExchange, DeskLine, Offer
@@ -152,3 +152,44 @@ def test_voice_agent_under_dry_run_stays_simulated() -> None:
 def test_voice_agent_live_is_the_real_verifier() -> None:
     cfg = _settings(verify_agent="voice_agent", dry_run=False)
     assert isinstance(_default_verifier(cfg, DeskExchange(), api_key="k"), VoiceAgentVerifier)
+
+
+# -- the desk token ----------------------------------------------------------
+
+
+def _token_client(monkeypatch: pytest.MonkeyPatch, exchange: DeskExchange) -> TestClient:
+    monkeypatch.setattr(
+        "apps.gateway.app.get_settings",
+        lambda: Settings(verify_enabled=True, verify_desk_token="desk-secret"),
+    )
+    return _client(exchange)
+
+
+def test_offers_need_the_token_when_one_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _token_client(monkeypatch, DeskExchange()) as c:
+        assert c.get("/verify-desk/offers").status_code == 401
+        assert c.get("/verify-desk/offers?token=wrong").status_code == 401
+        assert c.get("/verify-desk").status_code == 200  # the static page stays open
+
+
+def test_a_wrong_token_is_refused_without_burning_the_ticket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exchange = DeskExchange()
+    with _token_client(monkeypatch, exchange) as c:
+        offer = c.portal.call(_offer, exchange)
+        waiter = c.portal.start_task_soon(exchange.wait_answer, offer)
+        with pytest.raises(WebSocketDisconnect) as refused:
+            with c.websocket_connect(f"/ws/verify-desk/{offer.ticket}?token=wrong"):
+                pass
+        assert refused.value.code == UNAUTHORISED_CODE
+        with c.websocket_connect(f"/ws/verify-desk/{offer.ticket}?token=desk-secret"):
+            assert waiter.result(timeout=2) is not None
+
+
+def test_the_echo_line_needs_the_token_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _token_client(monkeypatch, DeskExchange()) as c:
+        with pytest.raises(WebSocketDisconnect) as refused:
+            with c.websocket_connect("/ws/verify-desk/echo"):
+                pass
+        assert refused.value.code == UNAUTHORISED_CODE

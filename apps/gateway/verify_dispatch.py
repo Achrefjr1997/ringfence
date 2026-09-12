@@ -38,6 +38,7 @@ from packages.intervene.templates import select_template
 from packages.risk.numeric import AMOUNT_RE
 from packages.verify.budget import VerificationBudget
 from packages.verify.directory import Directory, Institution, get_directory
+from packages.verify.stats import VerificationStats
 
 log = logging.getLogger("ringfence.verify")
 
@@ -80,16 +81,22 @@ class VerificationDispatcher:
         directory: Directory | None = None,
         budget: VerificationBudget | None = None,
         enabled: bool = False,
+        stats: VerificationStats | None = None,
     ) -> None:
         self._bus = bus
         self._verifier = verifier
         self._directory = directory or get_directory()
         self._budget = budget or VerificationBudget()
         self._enabled = enabled
+        self.stats = stats or VerificationStats()
         # session_id -> recent CALLER text, oldest evicted first.
         self._buffer: OrderedDict[str, list[str]] = OrderedDict()
         # session_id -> recent UNKNOWN-role text: a fallback source only.
         self._unattributed: OrderedDict[str, list[str]] = OrderedDict()
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
 
     async def run(self) -> None:
         """Consume turns and decisions until cancelled."""
@@ -202,6 +209,7 @@ class VerificationDispatcher:
                 stage="skipped",
                 reason="no_institution",
             )
+            self.stats.skip("no_institution")
             return
 
         refusal = self._budget.refuse_reason(session_id=session_id, tenant=tenant)
@@ -216,6 +224,7 @@ class VerificationDispatcher:
                 reason=refusal,
                 institution=institution,
             )
+            self.stats.skip(refusal)
             return
 
         self._budget.claim(session_id=session_id, tenant=tenant)
@@ -255,6 +264,7 @@ class VerificationDispatcher:
         finally:
             self._budget.release()
 
+        self.stats.record(outcome)
         if outcome is None:
             # The guard refused, or it raised. Either way nothing was learnt.
             await self._publish_named(

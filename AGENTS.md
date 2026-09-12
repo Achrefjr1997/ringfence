@@ -5,6 +5,14 @@ Ringfence listens to a live phone call, detects social-engineering fraud in
 real time, and warns the person being scammed. It is an **observer**: it never
 speaks to the caller, never blocks a call, never moves money.
 
+**One documented exception, off by default:** the verification agent
+(`packages/verify`, `docs/VERIFY.md`). With `RF_VERIFY_ENABLED=true`, an
+INTERVENE whose caller named a listed institution may open one short,
+self-identifying conversation with *that institution's desk* to ask whether
+it placed the call. It still never speaks to the caller. It may only reach
+desks listed in `config/verify/directory.yaml`, never takes a destination from
+anything said on the call, and never runs in dry-run or replay (invariant #4).
+
 Design documents (read the relevant section, not the whole file):
 - `docs/DESIGN_MVP.md` — the buildable system
 - `docs/DESIGN_PRODUCTION.md` — the interfaces we are building against
@@ -31,6 +39,7 @@ packages/asr/         ASR provider interface + implementations
 packages/media/       resampling, VAD, role inference
 packages/ingress/     capture adapters
 packages/intervene/   interventions + notifications
+packages/verify/      verification agent (off by default) — docs/VERIFY.md
 packages/eval/        corpus replay + metrics
 apps/gateway/         FastAPI: WebSocket ingest, SSE out
 apps/console/         static dashboard

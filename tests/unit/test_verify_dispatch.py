@@ -400,3 +400,15 @@ async def test_the_bus_loop_keeps_consuming_while_a_verification_is_in_flight() 
     loop.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await loop
+
+
+async def test_outcomes_and_skips_are_counted_for_metrics() -> None:
+    bus = InProcessBus()
+    d = _dispatcher(bus)
+    await d.on_turn("rf.acme.turn", _turn("this is your electricity supplier", session="s9"))
+    await d.on_decision("rf.acme.decision", _decision(session="s9"))
+    await d.on_turn("rf.acme.turn", _turn("Amazon account security"))
+    await d.on_decision("rf.acme.decision", _decision())
+    await d.on_decision("rf.acme.decision", _decision())  # already verified
+    assert d.stats.skipped == {"no_institution": 1, "already_verified": 1}
+    assert d.stats.outcomes[("unconfirmed", False)] == 1
