@@ -1,0 +1,48 @@
+# Trusted directory — who the verification agent may contact.
+#
+# This file is the ONLY source of contactable identities. A name the scammer
+# says is matched against `aliases`; anything not listed here resolves to
+# nothing and no verification happens. There is no default and no fuzzy
+# fallback, because contacting the wrong institution is worse than
+# contacting none.
+#
+# `desk_id` names the verification desk that answers — it is not a phone
+# number, and nothing in packages/verify can dial one. See directory.py.
+#
+# DEMO ENTRIES ONLY. Every desk here is one we serve ourselves. Never add a
+# real institution's genuine contact route: this file decides who an
+# automated agent talks to, and an entry impersonating a real fraud desk
+# would be a liability, not a feature.
+#
+# Aliases are normalised on load (casefolded, punctuation flattened) and must
+# be unique across the whole file — an alias claimed twice is a coin-flip
+# about who gets contacted, so it fails at startup.
+version: 1
+institutions:
+  - id: amazon
+    display_name: Amazon
+    desk_id: demo_desk
+    line_label: account security
+    aliases:
+      - amazon account security
+      - amazon fraud prevention
+      - amazon security team
+      - amazon
+
+  - id: moneygram
+    display_name: MoneyGram
+    desk_id: demo_desk
+    line_label: account security
+    aliases:
+      - moneygram account security
+      - moneygram fraud prevention
+      - moneygram
+
+  - id: ringbank
+    display_name: RingBank
+    desk_id: demo_desk
+    line_label: fraud department
+    aliases:
+      - ringbank fraud department
+      - ringbank security
+      - ringbank
