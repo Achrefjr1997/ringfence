@@ -75,14 +75,22 @@ export function mountConsole(sessionId, els, query = "") {
     }
   });
 
-  // Verification agent progress (packages/verify). Only "dialing" needs its
-  // own rendering -- the outcome arrives as a warning event above, already
-  // translated. "skipped" stays off the banner on purpose: it is operator
+  // Verification agent progress (packages/verify). The outcome arrives as a
+  // warning event above, already translated; these are the steps before it,
+  // so the person watches the check happen instead of waiting in silence.
+  // "skipped" and "failed" stay off the banner on purpose: operator
   // information, not something the person on the call needs to read.
   es.addEventListener("verification", (e) => {
     const d = JSON.parse(e.data);
-    if (!els.coach || d.stage !== "dialing") return;
-    els.coach.textContent = `Verifying with ${d.institution_display}…`;
+    if (!els.coach) return;
+    const who = d.institution_display;
+    let text;
+    if (d.stage === "dialing") text = `Verifying with ${who}…`;
+    else if (d.stage === "ringing") text = `Calling ${who}'s verification desk…`;
+    else if (d.stage === "connected") text = `${who} answered. Asking whether they called you…`;
+    else if (d.stage === "transcript") text = `${d.role === "agent" ? "RingFence" : who}: “${d.text}”`;
+    else return;
+    els.coach.textContent = text;
     els.coach.classList.add("live");
   });
 

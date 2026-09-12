@@ -26,6 +26,9 @@ from packages.intervene.service import InterventionService
 from packages.intervene.webhook import GuardianWebhook
 from packages.policy.pack import load_pack
 from packages.verify.agent import VoiceAgentSession
+from packages.verify.desk import DeskExchange, DeskLine
+from packages.verify.directory import get_directory
+from packages.verify.live import VoiceAgentVerifier
 
 PACK = load_pack("config/policy/default.yaml")
 
@@ -37,7 +40,7 @@ class _SpyConnect:
     def __init__(self) -> None:
         self.opened: list[str] = []
 
-    async def __call__(self, url: str, **kw: object) -> object:
+    async def __call__(self, url: str, *, additional_headers: dict[str, str]) -> object:
         self.opened.append(url)
         raise _Reached
 
@@ -46,18 +49,20 @@ class _Reached(Exception):
     """The connect was reached. Carries no data; its occurrence is the fact."""
 
 
+_INSTITUTION = get_directory().all()[0]
+
+
 async def _run_verifications(*, dry_run: bool, mode: Mode) -> _SpyConnect:
-    """Every fraud fixture's INTERVENE decisions, through the agent."""
+    """Every fraud fixture's INTERVENE decisions, through the agent. The
+    session turns a refused connect into an unanswered outcome rather than
+    raising, so the spy's record is the whole observation."""
     connect = _SpyConnect()
     session = VoiceAgentSession(api_key="k", connect=connect, dry_run=dry_run)
     for fx in iter_fixtures(label="fraud"):
         for decision in run_fixture(fx.id).decisions:
             if decision.state != "INTERVENE":
                 continue
-            try:
-                await session.start(mode=mode)
-            except (_Reached, NotImplementedError):
-                pass  # live mode got through; that is what the spy records
+            await session.start(mode=mode, institution=_INSTITUTION, amount=None, desk=DeskLine())
     return connect
 
 
@@ -130,3 +135,29 @@ async def test_agent_guard_is_not_vacuous_live_mode_does_open() -> None:
     connect = await _run_verifications(dry_run=False, mode=Mode.CARRIER)
     assert connect.opened, "live mode opened nothing — the guard tests would be meaningless"
     assert all(u.startswith("wss://") for u in connect.opened)
+
+
+@pytest.mark.invariant
+@pytest.mark.parametrize(
+    "dry_run, mode",
+    [(True, Mode.CARRIER), (True, Mode.SDK), (False, Mode.REPLAY)],
+)
+async def test_no_desk_is_rung_in_dry_run_or_replay(dry_run: bool, mode: Mode) -> None:
+    """The live verifier pages a human at the verification desk *before* it
+    opens the paid session. Paging a person is a side effect too, so the
+    guard has to come before the ring, not merely before the connect."""
+    connect = _SpyConnect()
+    exchange = DeskExchange(ttl_s=0.01)
+    verifier = VoiceAgentVerifier(
+        session=VoiceAgentSession(api_key="k", connect=connect, dry_run=dry_run),
+        exchange=exchange,
+    )
+    offers: list[object] = []
+    exchange.offer = lambda inst: offers.append(inst)  # type: ignore[method-assign,assignment,func-returns-value]
+    for fx in iter_fixtures(label="fraud"):
+        for decision in run_fixture(fx.id).decisions:
+            if decision.state == "INTERVENE":
+                assert (
+                    await verifier.verify(institution=_INSTITUTION, amount=None, mode=mode) is None
+                )
+    assert offers == [] and connect.opened == []

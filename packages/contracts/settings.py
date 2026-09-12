@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     # when on, an INTERVENE whose caller named an institution in
     # config/verify/directory.yaml opens a verification.
     verify_enabled: bool = False
+    # Which verifier answers when it is on. "simulated" holds no conversation
+    # and labels every result as simulated. "voice_agent" opens a real
+    # AssemblyAI Voice Agent session to the /verify-desk page -- it needs
+    # ASSEMBLYAI_API_KEY and RF_DRY_RUN=false, and costs per minute.
+    verify_agent: Literal["simulated", "voice_agent"] = "simulated"
 
 
 @lru_cache
