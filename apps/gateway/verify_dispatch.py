@@ -5,10 +5,11 @@ Watches the same ``rf.*.decision`` stream as ``guardian.py`` and
 reconstruct **who the caller claimed to be**. That is not on the decision
 event -- ``packages/pipeline/pipeline.py`` strips ``evidence`` before
 publishing, so an INTERVENE says ``AUTH_CLAIM`` fired but not that the caller
-said "Amazon". The name comes from the ``rf.*.turn`` stream instead, and only
-ever from **CALLER** turns.
+said "Amazon". The name comes from the ``rf.*.turn`` stream instead: CALLER
+turns first, unattributed (``UNKNOWN``) turns only as a fallback, and **never
+CALLEE** -- see ``_resolve`` for why the fallback exists.
 
-The CALLER-only rule is invariant #1's idea applied to an outward action: a
+The never-CALLEE rule is invariant #1's idea applied to an outward action: a
 frightened person repeating "Amazon" back at the scammer is exactly what
 happens on these calls, and it must never be what causes Amazon to be
 contacted.
@@ -79,6 +80,8 @@ class VerificationDispatcher:
         self._enabled = enabled
         # session_id -> recent CALLER text, oldest evicted first.
         self._buffer: OrderedDict[str, list[str]] = OrderedDict()
+        # session_id -> recent UNKNOWN-role text: a fallback source only.
+        self._unattributed: OrderedDict[str, list[str]] = OrderedDict()
 
     async def run(self) -> None:
         """Consume turns and decisions until cancelled."""
@@ -95,18 +98,48 @@ class VerificationDispatcher:
     # -- the caller's own words -------------------------------------------
 
     async def on_turn(self, subject: str, payload: dict[str, Any]) -> None:
-        if not self._enabled or payload.get("role") != "CALLER":
+        if not self._enabled:
             return
+        role = payload.get("role")
+        if role == "CALLER":
+            store = self._buffer
+        elif role == "UNKNOWN":
+            store = self._unattributed
+        else:
+            return  # CALLEE is never a source -- see _resolve
         session_id = str(payload.get("session_id", ""))
         text = str(payload.get("text", "")).strip()
         if not session_id or not text:
             return
-        said = self._buffer.setdefault(session_id, [])
-        self._buffer.move_to_end(session_id)
+        said = store.setdefault(session_id, [])
+        store.move_to_end(session_id)
         said.append(text)
         del said[:-_BUFFER_TURNS]
-        while len(self._buffer) > _BUFFER_TURNS:
-            self._buffer.popitem(last=False)
+        while len(store) > _BUFFER_TURNS:
+            store.popitem(last=False)
+
+    def _resolve(self, session_id: str) -> tuple[Institution | None, str | None]:
+        """CALLER speech first, unattributed speech as a fallback, CALLEE never.
+
+        Mixed (speakerphone) capture labels every turn UNKNOWN until the acoustic
+        classifier calibrates, roughly eight seconds in -- which is exactly when
+        a caller says who they claim to be. Found live: a genuine INTERVENE was
+        skipped as ``no_institution`` because "Amazon Account Security" was only
+        ever said inside that window. Carrier ingress has exact roles and never
+        produces UNKNOWN, so this relaxes nothing where attribution is certain.
+
+        CALLEE is still never a source: a frightened victim repeating the name
+        back must not be what causes that institution to be contacted. The
+        source is reported on every event, so an operator can see whether the
+        name was attributed or inferred.
+        """
+        inst = self._directory.resolve(" ".join(self._buffer.get(session_id, [])))
+        if inst is not None:
+            return inst, "caller"
+        inst = self._directory.resolve(" ".join(self._unattributed.get(session_id, [])))
+        if inst is not None:
+            return inst, "unattributed"
+        return None, None
 
     # -- the decision to act ----------------------------------------------
 
@@ -126,16 +159,23 @@ class VerificationDispatcher:
         t = float(payload.get("t", 0.0))
         language = str(payload.get("language") or "en")
 
-        institution = self._directory.resolve(" ".join(self._buffer.get(session_id, [])))
+        institution, name_source = self._resolve(session_id)
         if institution is None:
-            await self._publish(
-                tenant, session_id, decision_id, t, stage="skipped", reason="no_institution"
+            await self._publish_named(
+                name_source,
+                tenant,
+                session_id,
+                decision_id,
+                t,
+                stage="skipped",
+                reason="no_institution",
             )
             return
 
         refusal = self._budget.refuse_reason(session_id=session_id, tenant=tenant)
         if refusal is not None:
-            await self._publish(
+            await self._publish_named(
+                name_source,
                 tenant,
                 session_id,
                 decision_id,
@@ -148,8 +188,14 @@ class VerificationDispatcher:
 
         self._budget.claim(session_id=session_id, tenant=tenant)
         try:
-            await self._publish(
-                tenant, session_id, decision_id, t, stage="dialing", institution=institution
+            await self._publish_named(
+                name_source,
+                tenant,
+                session_id,
+                decision_id,
+                t,
+                stage="dialing",
+                institution=institution,
             )
             outcome = await self._verifier.verify(
                 institution=institution, amount=None, mode=_mode_of(payload)
@@ -162,12 +208,19 @@ class VerificationDispatcher:
 
         if outcome is None:
             # The guard refused, or it raised. Either way nothing was learnt.
-            await self._publish(
-                tenant, session_id, decision_id, t, stage="failed", institution=institution
+            await self._publish_named(
+                name_source,
+                tenant,
+                session_id,
+                decision_id,
+                t,
+                stage="failed",
+                institution=institution,
             )
             return
 
-        await self._publish(
+        await self._publish_named(
+            name_source,
             tenant,
             session_id,
             decision_id,
@@ -194,6 +247,9 @@ class VerificationDispatcher:
             },
         )
 
+    async def _publish_named(self, name_source: str | None, *args: Any, **kwargs: Any) -> None:
+        await self._publish(*args, name_source=name_source, **kwargs)
+
     async def _publish(
         self,
         tenant: str,
@@ -205,8 +261,10 @@ class VerificationDispatcher:
         reason: str | None = None,
         institution: Institution | None = None,
         outcome: VerificationOutcome | None = None,
+        name_source: str | None = None,
     ) -> None:
         payload: dict[str, Any] = {
+            "name_source": name_source,
             "session_id": session_id,
             "decision_id": decision_id,
             "t": t,

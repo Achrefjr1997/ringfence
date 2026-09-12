@@ -3,9 +3,10 @@
 Watches the same bus as InterventionDispatcher, but has to do something none
 of the other consumers do -- reconstruct *who the caller claimed to be*. That
 is not on the decision event (pipeline.py strips `evidence`), so it comes
-from the rf.*.turn stream, and only ever from CALLER turns.
+from the rf.*.turn stream: CALLER turns first, UNKNOWN turns as a fallback
+(speakerphone capture labels the opening seconds UNKNOWN), never CALLEE.
 
-The CALLER-only rule is the same idea as invariant #1: a frightened victim
+The never-CALLEE rule is the same idea as invariant #1: a frightened victim
 repeating "Amazon" back at the scammer must never be what causes Amazon to be
 contacted.
 """
@@ -242,3 +243,69 @@ async def test_an_outcome_of_none_is_reported_as_unreachable_not_as_a_denial() -
 
     warnings = await _events(bus, "rf.acme.warning", 1)
     assert warnings and warnings[0]["template_id"] == "VERIFY_FAILED"
+
+
+# -- the calibration-window fallback (found live) ----------------------------
+
+
+async def test_an_unattributed_opening_line_can_name_the_institution() -> None:
+    """Found against the real stack: speakerphone capture labels turns UNKNOWN
+    until the acoustic classifier calibrates, and that window is exactly when
+    a caller says "this is Daniel from Amazon". A CALLER-only rule skipped a
+    genuine INTERVENE as no_institution. UNKNOWN is now a fallback source."""
+    bus = InProcessBus()
+    verifier = _StubVerifier()
+    d = _dispatcher(bus, verifier)
+    await d.on_turn(
+        "rf.acme.turn", _turn("this is Daniel from Amazon account security", role="UNKNOWN")
+    )
+    await d.on_decision("rf.acme.decision", _decision())
+
+    assert [i.id for i in verifier.calls] == ["amazon"]
+    first = (await _events(bus, "rf.acme.verification", 1))[0]
+    assert first["stage"] == "dialing"
+    assert first["name_source"] == "unattributed"
+
+
+async def test_caller_speech_outranks_unattributed_speech() -> None:
+    """When attribution exists, it wins. The fallback only fills silence."""
+    moneygram = Institution.model_validate(
+        {
+            "id": "moneygram",
+            "display_name": "MoneyGram",
+            "desk_id": "demo_desk",
+            "line_label": "account security",
+            "aliases": ["moneygram"],
+        }
+    )
+    bus = InProcessBus()
+    verifier = _StubVerifier()
+    d = VerificationDispatcher(
+        bus, directory=Directory([_INST, moneygram]), verifier=verifier, enabled=True
+    )
+    await d.on_turn("rf.acme.turn", _turn("moneygram mentioned early", role="UNKNOWN"))
+    await d.on_turn("rf.acme.turn", _turn("amazon account security here", role="CALLER"))
+    await d.on_decision("rf.acme.decision", _decision())
+
+    assert [i.id for i in verifier.calls] == ["amazon"]
+    first = (await _events(bus, "rf.acme.verification", 1))[0]
+    assert first["name_source"] == "caller"
+
+
+async def test_callee_is_still_never_a_source_even_with_no_other_speech() -> None:
+    """The fallback must not quietly reopen the victim-echo hole."""
+    bus = InProcessBus()
+    verifier = _StubVerifier()
+    d = _dispatcher(bus, verifier)
+    await d.on_turn("rf.acme.turn", _turn("amazon account security?", role="CALLEE"))
+    await d.on_turn("rf.acme.turn", _turn("hello, are you there", role="UNKNOWN"))
+    await d.on_decision("rf.acme.decision", _decision())
+    assert verifier.calls == []
+
+
+async def test_the_unattributed_buffer_is_bounded_too() -> None:
+    bus = InProcessBus()
+    d = _dispatcher(bus)
+    for i in range(500):
+        await d.on_turn("rf.acme.turn", _turn(f"filler {i}", role="UNKNOWN", session=f"s{i}"))
+    assert len(d._unattributed) <= 64
