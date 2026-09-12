@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 
 from packages.contracts.audio import Mode
-from packages.contracts.verify import VerificationOutcome
+from packages.contracts.verify import Progress, VerificationOutcome
 from packages.verify.directory import Institution
 
 
@@ -26,7 +26,12 @@ class SimulatedVerifier:
         self._delay_s = delay_s
 
     async def verify(
-        self, *, institution: Institution, amount: str | None, mode: Mode
+        self,
+        *,
+        institution: Institution,
+        amount: str | None,
+        mode: Mode,
+        progress: Progress | None = None,
     ) -> VerificationOutcome | None:
         # A real verification takes seconds; an instant one would make the
         # demo misrepresent what the live feature feels like.

@@ -47,9 +47,15 @@ class _StubVerifier:
             verified=False, reason="no record of that call", confidence="high"
         )
         self.calls: list[Institution] = []
+        self.amounts: list[str | None] = []
 
-    async def verify(self, *, institution: Institution, amount: str | None, mode: Mode):  # noqa: ANN201
+    async def verify(  # noqa: ANN201
+        self, *, institution: Institution, amount: str | None, mode: Mode, progress=None
+    ):
         self.calls.append(institution)
+        self.amounts.append(amount)
+        if progress is not None:
+            await progress("transcript", {"role": "desk", "text": "no record"})
         return self.outcome
 
 
@@ -110,7 +116,7 @@ async def test_a_named_institution_is_verified_and_the_result_published() -> Non
 
     assert [i.id for i in verifier.calls] == ["amazon"]
     stages = [e["stage"] for e in await _events(bus, "rf.acme.verification", 3)]
-    assert stages == ["dialing", "result", "result"][: len(stages)]
+    assert stages == ["dialing", "transcript", "result"][: len(stages)]
     assert any(e.get("verified") is False for e in await _events(bus, "rf.acme.verification", 3))
 
 
@@ -309,3 +315,54 @@ async def test_the_unattributed_buffer_is_bounded_too() -> None:
     for i in range(500):
         await d.on_turn("rf.acme.turn", _turn(f"filler {i}", role="UNKNOWN", session=f"s{i}"))
     assert len(d._unattributed) <= 64
+
+
+# -- Phase 2: what the verifier is given, and what it reports back ------------
+
+
+def _recording(bus: InProcessBus) -> list[tuple[str, dict]]:
+    published: list[tuple[str, dict]] = []
+    original = bus.publish
+
+    async def publish(subject: str, payload: dict) -> None:  # type: ignore[type-arg]
+        published.append((subject, payload))
+        await original(subject, payload)
+
+    bus.publish = publish  # type: ignore[method-assign]
+    return published
+
+
+async def test_verifier_progress_is_published_as_transcript_stages() -> None:
+    bus = InProcessBus()
+    published = _recording(bus)
+    d = _dispatcher(bus)
+    await d.on_turn("rf.acme.turn", _turn("Amazon account security here"))
+    await d.on_decision("rf.acme.decision", _decision())
+
+    stages = [p for s, p in published if s == "rf.acme.verification"]
+    assert [p["stage"] for p in stages] == ["dialing", "transcript", "result"]
+    line = stages[1]
+    assert line["role"] == "desk" and line["text"] == "no record"
+    assert line["institution"] == "amazon"
+    assert "role" not in stages[0] and "text" not in stages[2]
+
+
+async def test_the_amount_comes_from_caller_speech() -> None:
+    bus = InProcessBus()
+    verifier = _StubVerifier()
+    d = _dispatcher(bus, verifier)
+    await d.on_turn("rf.acme.turn", _turn("Amazon account security, a charge of 500 dollars"))
+    await d.on_decision("rf.acme.decision", _decision())
+    assert verifier.amounts == ["500 dollars"]
+
+
+async def test_an_amount_only_in_unattributed_speech_is_never_passed_on() -> None:
+    """Omitting an amount is free; repeating the victim's guess to the
+    institution as fact is not."""
+    bus = InProcessBus()
+    verifier = _StubVerifier()
+    d = _dispatcher(bus, verifier)
+    await d.on_turn("rf.acme.turn", _turn("Amazon account security", role="UNKNOWN"))
+    await d.on_turn("rf.acme.turn", _turn("is it the 500 dollars?", role="UNKNOWN"))
+    await d.on_decision("rf.acme.decision", _decision())
+    assert [i.id for i in verifier.calls] == ["amazon"] and verifier.amounts == [None]

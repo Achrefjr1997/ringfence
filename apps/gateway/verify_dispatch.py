@@ -27,12 +27,14 @@ from __future__ import annotations
 import contextlib
 import logging
 from collections import OrderedDict
+from collections.abc import Mapping
 from typing import Any, Protocol
 
 from packages.contracts.audio import Mode
 from packages.contracts.events import EventBus
-from packages.contracts.verify import VerificationOutcome
+from packages.contracts.verify import Progress, VerificationOutcome, VerificationStage
 from packages.intervene.templates import select_template
+from packages.risk.numeric import AMOUNT_RE
 from packages.verify.budget import VerificationBudget
 from packages.verify.directory import Directory, Institution, get_directory
 
@@ -47,10 +49,15 @@ _BUFFER_TURNS = 64
 
 
 class Verifier(Protocol):
-    """The seam Phase 2 fills with the real Voice Agent session."""
+    """``packages/verify/simulated.py`` or ``packages/verify/live.py``."""
 
     async def verify(
-        self, *, institution: Institution, amount: str | None, mode: Mode
+        self,
+        *,
+        institution: Institution,
+        amount: str | None,
+        mode: Mode,
+        progress: Progress | None = None,
     ) -> VerificationOutcome | None: ...
 
 
@@ -141,6 +148,17 @@ class VerificationDispatcher:
             return inst, "unattributed"
         return None, None
 
+    def _amount(self, session_id: str) -> str | None:
+        """The amount the caller stated, from CALLER speech only.
+
+        Stricter than ``_resolve`` on purpose. A missing amount costs nothing --
+        the prompt then says nothing about money -- but an amount taken from
+        unattributed speech might be the victim's guess, and the agent would
+        repeat it to the institution as fact.
+        """
+        m = AMOUNT_RE.search(" ".join(self._buffer.get(session_id, [])).lower())
+        return m.group(0) if m else None
+
     # -- the decision to act ----------------------------------------------
 
     async def on_decision(self, subject: str, payload: dict[str, Any]) -> None:
@@ -197,8 +215,25 @@ class VerificationDispatcher:
                 stage="dialing",
                 institution=institution,
             )
+
+            async def progress(stage: VerificationStage, detail: Mapping[str, str]) -> None:
+                await self._publish_named(
+                    name_source,
+                    tenant,
+                    session_id,
+                    decision_id,
+                    t,
+                    stage=stage,
+                    institution=institution,
+                    role=detail.get("role"),
+                    text=detail.get("text"),
+                )
+
             outcome = await self._verifier.verify(
-                institution=institution, amount=None, mode=_mode_of(payload)
+                institution=institution,
+                amount=self._amount(session_id),
+                mode=_mode_of(payload),
+                progress=progress,
             )
         except Exception:  # noqa: BLE001 - a verification must never break the bus loop
             log.exception("verification failed", extra={"session_id": session_id})
@@ -262,6 +297,8 @@ class VerificationDispatcher:
         institution: Institution | None = None,
         outcome: VerificationOutcome | None = None,
         name_source: str | None = None,
+        role: str | None = None,
+        text: str | None = None,
     ) -> None:
         payload: dict[str, Any] = {
             "name_source": name_source,
@@ -277,6 +314,10 @@ class VerificationDispatcher:
             "detail": outcome.reason if outcome else None,
             "simulated": outcome.simulated if outcome else False,
         }
+        if text is not None:
+            # stage "transcript": one line of the verification conversation
+            payload["role"] = role
+            payload["text"] = text
         await self._bus.publish(f"rf.{tenant}.verification", payload)
 
 

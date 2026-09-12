@@ -7,6 +7,7 @@ dispatcher / agent / bus boundary, so per AGENTS.md they live here.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -15,11 +16,17 @@ from typing import Literal
 VerificationStage = Literal[
     "skipped",  # no institution resolved, or budget/guard refused -- never ran
     "dialing",
+    "ringing",  # the desk has been offered the conversation, nobody has answered yet
     "connected",
     "transcript",
     "result",
     "failed",
 ]
+
+# How a verifier reports intermediate stages back to whoever dispatched it,
+# without knowing about tenants, sessions or the bus. The mapping carries only
+# short strings (for "transcript": ``role`` and ``text``).
+Progress = Callable[[VerificationStage, Mapping[str, str]], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
