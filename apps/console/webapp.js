@@ -736,6 +736,18 @@ function liveView() {
   $("#feed", c).onclick = async () => {
     const f = $("#wav", c).files[0];
     if (!f) { els.status.textContent = "pick a .wav / audio file first"; return; }
+    // A second click while a feed is already running used to leave the
+    // OLD interval alive: it kept sending frames from its own closure's
+    // buffer/position into whatever feedWs the new click reassigns, so two
+    // streams landed interleaved on one socket -- corrupting the audio the
+    // server actually sees (a role classifier trained on that garbage
+    // reads as "everything is one role"; the pipeline built for one
+    // continuous stream reads as if the call broke mid-sentence). Stop
+    // any run in progress before starting a new one.
+    if (feedTimer) { clearInterval(feedTimer); feedTimer = null; }
+    if (feedWs && feedWs.readyState <= 1) feedWs.close();
+    feedWs = null;
+    $("#feed", c).disabled = true;
     const s = $("#sid", c).value;
     const speed = Number($("#wspeed", c).value) || 3;
     try {
@@ -764,6 +776,7 @@ function liveView() {
             clearInterval(feedTimer); feedTimer = null;
             if (feedWs && feedWs.readyState === 1) feedWs.close();
             els.status.textContent = pos >= total ? "file streamed — waiting for final turns" : "stopped";
+            $("#feed", c).disabled = false;
             return;
           }
           feedWs.send(i16.buffer.slice(pos * 2, (pos + FRAME) * 2));
@@ -771,7 +784,7 @@ function liveView() {
           els.status.textContent = `streaming ${(pos / 16000).toFixed(0)}s / ${(total / 16000).toFixed(0)}s`;
         }, Math.max(2, Math.round(20 / speed)));
       };
-    } catch (e) { els.status.textContent = "feed failed: " + (e.message || e); }
+    } catch (e) { els.status.textContent = "feed failed: " + (e.message || e); $("#feed", c).disabled = false; }
   };
 
   const stopAll = () => {
@@ -779,7 +792,7 @@ function liveView() {
     if (feedTimer) { clearInterval(feedTimer); feedTimer = null; }
     if (feedWs && feedWs.readyState <= 1) feedWs.close();
     feedWs = null;
-    els.status.textContent = "stopped"; $("#cap", c).disabled = false; $("#stop", c).disabled = true;
+    els.status.textContent = "stopped"; $("#cap", c).disabled = false; $("#feed", c).disabled = false; $("#stop", c).disabled = true;
   };
   $("#stop", c).onclick = stopAll;
 }
