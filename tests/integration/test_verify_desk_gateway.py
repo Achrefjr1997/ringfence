@@ -193,3 +193,19 @@ def test_the_echo_line_needs_the_token_too(monkeypatch: pytest.MonkeyPatch) -> N
             with c.websocket_connect("/ws/verify-desk/echo"):
                 pass
         assert refused.value.code == UNAUTHORISED_CODE
+
+
+def test_the_log_says_which_side_ended_the_desk_line(caplog: pytest.LogCaptureFixture) -> None:
+    """A hang-up and a dropped connection both reach the agent as
+    desk_hangup; only this log line tells them apart."""
+    import logging
+
+    exchange = DeskExchange()
+    with caplog.at_level(logging.INFO, logger="ringfence.verify"), _client(exchange) as c:
+        offer = c.portal.call(_offer, exchange)
+        waiter = c.portal.start_task_soon(exchange.wait_answer, offer)
+        with c.websocket_connect(f"/ws/verify-desk/{offer.ticket}"):
+            line = waiter.result(timeout=2)
+            assert line is not None
+        assert c.portal.call(_receive, line) is None
+    assert any("desk disconnected" in r.getMessage() for r in caplog.records)
