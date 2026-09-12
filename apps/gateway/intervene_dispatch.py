@@ -18,6 +18,18 @@ Only the ``app_banner`` channel is actually delivered here:
 * ``in_ear`` needs push infrastructure that does not exist yet
   (``docs/ROADMAP.md`` Phase 4.1: no FCM/APNs, no device registration).
 
+Deliberately **not** gated by ``RF_DRY_RUN``, unlike ``GuardianDispatcher``.
+That flag exists to stop real external side effects -- a webhook fired, a
+notification sent, money spent -- and this dispatcher's only actual
+delivery is publishing to our own bus for a live viewer, exactly the same
+category as the ``turn`` and ``decision`` events that already flow
+regardless of dry_run. Wiring it to ``cfg.dry_run`` (the compose default
+is ``true``) would silently blank the coaching banner in every local demo,
+which is precisely backwards for a feature whose entire job is to be
+seen. ``_BannerTransport`` below is the actual guarantee against a real
+side effect slipping out: it no-ops every channel except ``app_banner``,
+so there is nothing dry_run would need to catch even if wired.
+
 One ``InterventionService`` per tenant, kept for the process lifetime, so
 its cooldown state is real -- constructing a fresh one per dispatch would
 mean cooldown never actually cools anything down.
@@ -105,20 +117,21 @@ class InterventionDispatcher:
         pack: PolicyPack,
         bus: EventBus,
         *,
-        dry_run: bool = True,
         coach: CoachGenerator | None = None,
     ) -> None:
         self._pack = pack
         self._bus = bus
-        self._dry_run = dry_run
         self._coach = coach
         self._services: dict[str, InterventionService] = {}
 
     def _service_for(self, tenant: str) -> InterventionService:
         svc = self._services.get(tenant)
         if svc is None:
+            # dry_run=False is intentional and always correct here -- see
+            # the module docstring. This is not the flag that would ever
+            # need to suppress app_banner.
             svc = InterventionService(
-                self._pack, transport=_BannerTransport(self._bus, tenant), dry_run=self._dry_run
+                self._pack, transport=_BannerTransport(self._bus, tenant), dry_run=False
             )
             self._services[tenant] = svc
         return svc

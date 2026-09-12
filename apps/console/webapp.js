@@ -701,13 +701,14 @@ function liveView() {
       <div><div class="gauge"><span id="gfill"></span></div><div class="glabel" id="glabel">0 · CALM</div></div>
       <div><div id="transcript"></div><div id="timeline"></div><div id="cf"></div></div>
     </div>
+    <div id="coach" class="coach"></div>
     <details style="margin-top:16px"><summary class="sub">speakerphone capture — mic level</summary>
       <div class="meter" style="margin-top:8px"><label>full-band (near voice)</label><div class="bar"><span id="mwide"></span></div></div>
       <div class="meter" style="margin-top:6px"><label>&le; 3.4 kHz (far / phone voice)</label><div class="bar"><span id="mtele"></span></div></div>
     </details>`;
   m.append(c);
 
-  const els = { gauge: $("#gfill", c), gaugeLabel: $("#glabel", c), transcript: $("#transcript", c), timeline: $("#timeline", c), cf: $("#cf", c), status: $("#status", c) };
+  const els = { gauge: $("#gfill", c), gaugeLabel: $("#glabel", c), transcript: $("#transcript", c), timeline: $("#timeline", c), cf: $("#cf", c), status: $("#status", c), coach: $("#coach", c) };
   const setBar = (n, rms) => { const db = 20 * Math.log10(Math.max(rms, 1e-6)); n.style.width = Math.max(0, Math.min(100, ((db + 60) / 60) * 100)) + "%"; };
 
   $("#watch", c).onclick = () => { detach && detach(); detach = mountConsole($("#sid", c).value, els, q); $("#stop", c).disabled = false; };

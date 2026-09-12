@@ -88,6 +88,11 @@ _RATE = 16_000  # rejection reasons, in check order: AUTH, TENANT, CONSENT, BILL
 _SESSION_IDLE_S = float(os.environ.get("RF_SESSION_IDLE_S", "120"))
 _IDLE_POLL_S = 5.0  # how often the receive loop wakes to check
 
+# /events/{id} keeps listening this long after .session.closed so a late
+# rf.*.warning (the LLM coach, up to ~2s behind its INTERVENE decision) can
+# still reach an already-ended session's viewer. See events() below.
+_EVENTS_CLOSE_GRACE_S = 3.0
+
 
 class _AccessLog(BaseHTTPMiddleware):
     """One structured line per HTTP request.  Health and metrics scrapes
@@ -329,6 +334,51 @@ def _default_asr() -> ASRProvider:
     from packages.asr.assemblyai import AssemblyAIStreaming
 
     return AssemblyAIStreaming(key)
+
+
+async def session_events(
+    bus: EventBus,
+    pattern: str,
+    session_id: str,
+    *,
+    close_grace_s: float = _EVENTS_CLOSE_GRACE_S,
+) -> AsyncIterator[dict[str, object]]:
+    """SSE payloads for one session: turn/decision/warning, then end.
+
+    Closing the instant ``.session.closed`` arrives used to cut the
+    connection before a delayed ``rf.*.warning`` could ever reach it -- the
+    LLM coach (``packages/intervene/coach.py``) answers up to ~2s after the
+    ``INTERVENE`` decision that triggered it, and a ``/replay`` session
+    closes almost the instant that decision is published, well before the
+    coach's async reply lands. Keeps listening ``close_grace_s`` past
+    closure so that late refinement still reaches this viewer, instead of
+    arriving at an already-closed socket.
+    """
+    it = bus.subscribe(pattern).__aiter__()
+    close_deadline: float | None = None
+    while True:
+        if close_deadline is not None:
+            remaining = close_deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            try:
+                subject, payload = await asyncio.wait_for(it.__anext__(), timeout=remaining)
+            except (TimeoutError, asyncio.TimeoutError, StopAsyncIteration):
+                return
+        else:
+            subject, payload = await it.__anext__()
+        if payload.get("session_id") != session_id:
+            continue
+        if subject.endswith(".decision"):
+            yield {"event": "decision", "data": json.dumps(payload)}
+        elif subject.endswith(".turn"):
+            yield {"event": "turn", "data": json.dumps(payload)}
+        elif subject.endswith(".warning"):
+            yield {"event": "warning", "data": json.dumps(payload)}
+        elif subject.endswith(".session.closed"):
+            yield {"event": "end", "data": json.dumps(payload)}
+            if close_deadline is None:
+                close_deadline = time.monotonic() + close_grace_s
 
 
 def create_app(
@@ -622,18 +672,8 @@ def create_app(
         pattern = tenant_pattern(tenant) if tenant else "rf.*"
 
         async def stream() -> AsyncIterator[dict[str, object]]:
-            async for subject, payload in the_bus.subscribe(pattern):
-                if payload.get("session_id") != session_id:
-                    continue
-                if subject.endswith(".decision"):
-                    yield {"event": "decision", "data": json.dumps(payload)}
-                elif subject.endswith(".turn"):
-                    yield {"event": "turn", "data": json.dumps(payload)}
-                elif subject.endswith(".warning"):
-                    yield {"event": "warning", "data": json.dumps(payload)}
-                elif subject.endswith(".session.closed"):
-                    yield {"event": "end", "data": json.dumps(payload)}
-                    return
+            async for item in session_events(the_bus, pattern, session_id):
+                yield item
                 if await request.is_disconnected():
                     return
 
@@ -1422,10 +1462,11 @@ def create_app(
     # live coaching: same decision stream, republished as rf.*.warning for
     # the protected person's own view (console Live tab) -- see
     # apps/gateway/intervene_dispatch.py for why this is a separate
-    # dispatcher rather than reusing guardian's.
+    # dispatcher rather than reusing guardian's, and why it does not take
+    # RF_DRY_RUN the way guardian does.
     the_coach = (coach_factory or _default_coach_factory())(the_pack)
     intervene_live = intervene_dispatcher or InterventionDispatcher(
-        the_pack, the_bus, dry_run=cfg.dry_run, coach=the_coach
+        the_pack, the_bus, coach=the_coach
     )
     # call ledger: watch rf.*.decision, append the escalation graph
     recorder = CallLedgerRecorder(the_ledger)

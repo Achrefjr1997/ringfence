@@ -44,7 +44,7 @@ async def _collect_one(bus: InProcessBus, pattern: str) -> dict[str, object]:
 
 async def test_intervene_publishes_a_warning_for_the_console_to_render() -> None:
     bus = InProcessBus()
-    d = InterventionDispatcher(PACK, bus, dry_run=False)
+    d = InterventionDispatcher(PACK, bus)
     warning = await d.dispatch("acme", _event())
     assert warning is not None and warning.delivered
 
@@ -67,7 +67,7 @@ async def test_only_app_banner_is_delivered_not_guardian_push() -> None:
 
     task = asyncio.create_task(_watch())
     await asyncio.sleep(0)
-    d = InterventionDispatcher(PACK, bus, dry_run=False)
+    d = InterventionDispatcher(PACK, bus)
     await d.dispatch("acme", _event())
     await asyncio.sleep(0.02)
     task.cancel()
@@ -78,25 +78,28 @@ async def test_only_app_banner_is_delivered_not_guardian_push() -> None:
 
 async def test_calm_and_watch_and_alert_do_not_fire() -> None:
     bus = InProcessBus()
-    d = InterventionDispatcher(PACK, bus, dry_run=False)
+    d = InterventionDispatcher(PACK, bus)
     for state in ("CALM", "WATCH", "ALERT"):
         assert await d.dispatch("acme", _event(state=state)) is None
 
 
-async def test_dry_run_suppresses_delivery_but_still_returns_the_warning() -> None:
-    """Matches InterventionService's own contract: dry_run logs and returns
-    the Warning with delivered=False, it does not raise or return None."""
+async def test_delivery_does_not_depend_on_rf_dry_run() -> None:
+    """The bug this guards: RF_DRY_RUN=true is the docker-compose default,
+    and the app used to hand it straight to InterventionService, silently
+    blanking the coaching banner in every local demo. app_banner is a bus
+    publish for a live viewer, not the external side effect dry_run exists
+    to stop -- there is no dry_run parameter to even pass here any more."""
     bus = InProcessBus()
-    d = InterventionDispatcher(PACK, bus, dry_run=True)
+    d = InterventionDispatcher(PACK, bus)
     warning = await d.dispatch("acme", _event())
-    assert warning is not None and warning.delivered is False
+    assert warning is not None and warning.delivered is True
 
 
 async def test_cooldown_is_shared_across_calls_for_the_same_tenant() -> None:
     """The dispatcher must reuse one InterventionService per tenant, or
     cooldown state resets every dispatch and never actually cools down."""
     bus = InProcessBus()
-    d = InterventionDispatcher(PACK, bus, dry_run=False)
+    d = InterventionDispatcher(PACK, bus)
     first = await d.dispatch("acme", _event())
     second = await d.dispatch("acme", _event())  # same session, immediately after
     assert first is not None and first.delivered
@@ -105,14 +108,14 @@ async def test_cooldown_is_shared_across_calls_for_the_same_tenant() -> None:
 
 async def test_the_warning_uses_the_language_carried_on_the_event() -> None:
     bus = InProcessBus()
-    d = InterventionDispatcher(PACK, bus, dry_run=False)
+    d = InterventionDispatcher(PACK, bus)
     warning = await d.dispatch("acme", _event(language="fr"))
     assert warning is not None and warning.language == "fr"
 
 
 async def test_missing_language_on_the_event_falls_back_to_english() -> None:
     bus = InProcessBus()
-    d = InterventionDispatcher(PACK, bus, dry_run=False)
+    d = InterventionDispatcher(PACK, bus)
     event = _event()
     del event["language"]
     warning = await d.dispatch("acme", event)
@@ -132,7 +135,7 @@ class _StubCoach:
 async def test_a_coach_publishes_a_second_richer_warning() -> None:
     bus = InProcessBus()
     coach = _StubCoach("Ask for a callback number and hang up now.")
-    d = InterventionDispatcher(PACK, bus, dry_run=False, coach=coach)
+    d = InterventionDispatcher(PACK, bus, coach=coach)
 
     seen = []
 
@@ -156,7 +159,7 @@ async def test_a_coach_publishes_a_second_richer_warning() -> None:
 async def test_the_coach_sees_every_active_caller_signal_not_just_one() -> None:
     bus = InProcessBus()
     coach = _StubCoach("combined sentence")
-    d = InterventionDispatcher(PACK, bus, dry_run=False, coach=coach)
+    d = InterventionDispatcher(PACK, bus, coach=coach)
     await d.dispatch("acme", _event())
 
     request = coach.requests[0]
@@ -167,7 +170,7 @@ async def test_the_coach_sees_every_active_caller_signal_not_just_one() -> None:
 async def test_a_coach_miss_leaves_only_the_static_warning() -> None:
     bus = InProcessBus()
     coach = _StubCoach(None)  # timeout / malformed / caller error, all the same to us
-    d = InterventionDispatcher(PACK, bus, dry_run=False, coach=coach)
+    d = InterventionDispatcher(PACK, bus, coach=coach)
 
     seen = []
 
@@ -190,14 +193,14 @@ async def test_a_coach_miss_leaves_only_the_static_warning() -> None:
 async def test_no_coach_configured_behaves_exactly_as_before() -> None:
     """Regression guard: the coach is entirely optional."""
     bus = InProcessBus()
-    d = InterventionDispatcher(PACK, bus, dry_run=False)  # no coach=
+    d = InterventionDispatcher(PACK, bus)  # no coach=
     warning = await d.dispatch("acme", _event())
     assert warning is not None and warning.delivered
 
 
 async def test_run_consumes_the_bus_and_ignores_non_intervene_and_replay() -> None:
     bus = InProcessBus()
-    d = InterventionDispatcher(PACK, bus, dry_run=False)
+    d = InterventionDispatcher(PACK, bus)
 
     task = asyncio.create_task(d.run())
     await asyncio.sleep(0)
