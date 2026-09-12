@@ -176,7 +176,10 @@ async function answer() {
   hungUp = false;
   try {
     call = await openAudio(`${WS}/ws/verify-desk/${encodeURIComponent(offer.ticket)}${Q}`, {
-      onOpen: () => show("connected", "On a verification call"),
+      onOpen: () => {
+        hangupArmedAt = performance.now() + ARM_MS;
+        show("connected", "On a verification call");
+      },
       onEvent: (m) => {
         if (m.type === "transcript") addLine(m.role, m.text, offer);
         else if (m.type === "ended") verdict = m.verified;
@@ -201,7 +204,16 @@ els.decline.addEventListener("click", () => {
   if (ringing) declined.add(ringing.ticket);
   idle("Declined");
 });
+// Hang up appears exactly where Answer just was, and Stop echo test where
+// Start was. A second click meant for the first button lands on the second
+// and ends the line a moment later -- seen live: code 1005, 1.8 s after
+// answering, and two echo tests stopped after 1-2 s. Both ignore clicks
+// until they have been on screen for ARM_MS.
+const ARM_MS = 1500;
+let hangupArmedAt = Infinity;
+let echoArmedAt = Infinity;
 els.hangup.addEventListener("click", () => {
+  if (performance.now() < hangupArmedAt) return;
   hungUp = true;
   if (call) call.close();
 });
@@ -210,6 +222,7 @@ els.hangup.addEventListener("click", () => {
 
 els.echo.addEventListener("click", async () => {
   if (echo) {
+    if (performance.now() < echoArmedAt) return;
     echo.close();
     return;
   }
@@ -221,6 +234,7 @@ els.echo.addEventListener("click", async () => {
   try {
     echo = await openAudio(`${WS}/ws/verify-desk/echo${Q}`, {
       onOpen: () => {
+        echoArmedAt = performance.now() + ARM_MS;
         els.echo.textContent = "Stop echo test";
         els.echoStatus.textContent = "speak — you should hear yourself";
       },
